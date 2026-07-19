@@ -1,13 +1,13 @@
 #include "test_framework.hpp"
 
-#include "tight/peer.hpp"
-#include "tight/command.hpp"
+#include "src/peer.hpp"
+#include "src/command.hpp"
 
 #include <chrono>
 #include <thread>
 
-using namespace creek;
-using namespace creek::tight_detail;
+using namespace tight;
+using namespace tight::tight_detail;
 
 static PacketHeader cmd_hdr(std::uint32_t seq) {
     PacketHeader h{};

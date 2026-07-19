@@ -2,7 +2,7 @@
 
 #include "gateway/gateway_config.hpp"
 #include "gateway/gateway_metrics.hpp"
-#include "creek/logger.hpp"
+#include "tight/logger.hpp"
 
 #include <atomic>
 #include <memory>
@@ -89,7 +89,7 @@ private:
         addr.sin_port = htons(m_port);
 
         if (::bind(m_socket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-            CREEK_LOG_WARN("Metrics HTTP bind failed on port " + std::to_string(m_port));
+            TIGHT_LOG_WARN("Metrics HTTP bind failed on port " + std::to_string(m_port));
             return;
         }
 
@@ -103,7 +103,7 @@ private:
         if (fl >= 0) fcntl(m_socket, F_SETFL, fl | O_NONBLOCK);
 #endif
 
-        CREEK_LOG_INFO("Metrics HTTP server listening on :" + std::to_string(m_port) + m_path);
+        TIGHT_LOG_INFO("Metrics HTTP server listening on :" + std::to_string(m_port) + m_path);
 
         while (m_running.load(std::memory_order_acquire)) {
             fd_set readfds;

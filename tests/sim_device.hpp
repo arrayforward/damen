@@ -1,7 +1,7 @@
 #pragma once
 
-#include "creek/tight.hpp"
-#include "creek/logger.hpp"
+#include "tight/tight.hpp"
+#include "tight/logger.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -32,38 +32,38 @@ public:
     ~SimDevice() { stop(); }
 
     bool start() {
-        creek::TightConfig tc;
-        tc.bind = creek::NetAddress("127.0.0.1", m_local_port);
+        tight::TightConfig tc;
+        tc.bind = tight::NetAddress("127.0.0.1", m_local_port);
         tc.id = m_device_name;
         tc.token = "gateway-shared-secret";
-        tc.role = creek::LinkRole::Leaf;
+        tc.role = tight::LinkRole::Leaf;
         tc.mtu = 1400;
         tc.heartbeat = std::chrono::seconds(5);
         tc.dead_timeout = std::chrono::seconds(30);
 
-        m_transport = std::make_unique<creek::TightTransport>(tc);
+        m_transport = std::make_unique<tight::TightTransport>(tc);
         m_transport->set_message_callback(
-            [this](const std::string&, creek::Bytes payload) {
+            [this](const std::string&, tight::Bytes payload) {
                 std::string json(payload.begin(), payload.end());
                 std::lock_guard<std::mutex> lock(m_mutex);
-                m_received.push_back({std::move(json), creek::unix_millis()});
+                m_received.push_back({std::move(json), tight::unix_millis()});
                 m_cv.notify_all();
             });
         m_transport->set_peer_callback(
-            [this](const creek::PeerEvent& ev) {
-                if (ev.state == creek::LinkState::Online ||
-                    ev.state == creek::LinkState::Established) {
+            [this](const tight::PeerEvent& ev) {
+                if (ev.state == tight::LinkState::Online ||
+                    ev.state == tight::LinkState::Established) {
                     m_connected.store(true);
-                } else if (ev.state == creek::LinkState::Closed) {
+                } else if (ev.state == tight::LinkState::Closed) {
                     m_connected.store(false);
                 }
             });
 
         if (!m_transport->start()) return false;
 
-        creek::RemotePeer server;
+        tight::RemotePeer server;
         server.id = "gateway-" + std::to_string(m_port);
-        server.address = creek::NetAddress("127.0.0.1", m_port);
+        server.address = tight::NetAddress("127.0.0.1", m_port);
         return m_transport->connect(server);
     }
 
@@ -76,7 +76,7 @@ public:
 
     bool send_json(const std::string& json) {
         if (!m_transport) return false;
-        creek::Bytes payload(json.begin(), json.end());
+        tight::Bytes payload(json.begin(), json.end());
         return m_transport->send("gateway-" + std::to_string(m_port),
                                   std::move(payload));
     }
@@ -194,7 +194,7 @@ private:
     std::string                       m_device_name;
     std::uint16_t                     m_port;
     std::uint16_t                     m_local_port;
-    std::unique_ptr<creek::TightTransport> m_transport;
+    std::unique_ptr<tight::TightTransport> m_transport;
     std::atomic<bool>                 m_connected{false};
     mutable std::mutex                m_mutex;
     std::vector<RecvEntry>            m_received;

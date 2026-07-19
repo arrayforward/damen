@@ -4,9 +4,9 @@
 
 ---
 
-## 1. tight 传输层（`namespace creek`）
+## 1. tight 传输层（`namespace tight`）
 
-包含方式：`#include "creek/tight.hpp"`（聚合 `creek/types.hpp`、`creek/tight/packet_codec.hpp`、`creek/tight/fec.hpp`、`creek/tight/bandwidth.hpp`）。
+包含方式：`#include "tight/tight.hpp"`（聚合 `creek/types.hpp`、`creek/tight/packet_codec.hpp`、`creek/tight/fec.hpp`、`creek/tight/bandwidth.hpp`）。
 
 ### 1.1 TightTransport（`creek/tight.hpp`）
 
@@ -147,8 +147,8 @@ template <typename T> class BlockingQueue {
     void close();  bool is_closed() const;  std::size_t size() const;
 };
 
-// 日志：CREEK_LOG_DEBUG/INFO/WARN/ERROR(msg)
-creek::Logger::instance().set_level(creek::LogLevel::Debug);
+// 日志：TIGHT_LOG_DEBUG/INFO/WARN/ERROR(msg)
+tight::Logger::instance().set_level(tight::LogLevel::Debug);
 ```
 
 ---

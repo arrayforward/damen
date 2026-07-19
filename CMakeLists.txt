@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(cloud-gateway VERSION 2.0.0 LANGUAGES CXX)
+project(cloud-gateway VERSION 2.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,204 +22,61 @@ else()
     set(EXTRA_LIBS)
 endif()
 
-add_library(creek STATIC
-    tight/transport.cpp
-    tight/reassembler.cpp
-    tight/fragmenter.cpp
-    tight/report.cpp
-    tight/command.cpp
-    tight/crypto.cpp
-    tight/packet_codec.cpp
-    tight/fec.cpp
-    tight/bandwidth.cpp
-    tight/address.cpp
-    tight/crc32.cpp
-    tight/wsa.cpp
-)
+# tight 协议独立库（tight/ 自包含：include/ 公共接口 + src/ 私有实现）
+add_subdirectory(tight)
 
-target_include_directories(creek PUBLIC
-    ${CMAKE_SOURCE_DIR}
-)
-
-target_link_libraries(creek PUBLIC
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-
+# 网关公共接口：tight 库 + 网关自身头 + tight/src（仅供测试触达内部头）
 add_library(gateway_core INTERFACE)
 target_include_directories(gateway_core INTERFACE
     ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/tight
 )
-target_link_libraries(gateway_core INTERFACE creek)
+target_link_libraries(gateway_core INTERFACE tight)
 
 add_executable(cloud_gateway
     gateway/gateway_main.cpp
 )
 
 target_link_libraries(cloud_gateway PRIVATE
-    creek
+    tight
     gateway_core
     Threads::Threads
     ${EXTRA_LIBS}
 )
+
+# client 端（设备模拟/直连测试工具）
+add_subdirectory(client)
 
 enable_testing()
 
-add_executable(test_channel
-    tests/test_channel.cpp
-)
-target_link_libraries(test_channel PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_channel COMMAND test_channel)
+function(add_gateway_test name source)
+    add_executable(${name} ${source})
+    target_link_libraries(${name} PRIVATE
+        tight
+        gateway_core
+        Threads::Threads
+        ${EXTRA_LIBS}
+    )
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
 
-add_executable(test_blackboard
-    tests/test_blackboard.cpp
-)
-target_link_libraries(test_blackboard PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_blackboard COMMAND test_blackboard)
+add_gateway_test(test_channel     tests/test_channel.cpp)
+add_gateway_test(test_blackboard  tests/test_blackboard.cpp)
+add_gateway_test(test_ratelimit   tests/test_ratelimit.cpp)
+add_gateway_test(test_session     tests/test_session.cpp)
+add_gateway_test(test_auth        tests/test_auth.cpp)
+add_gateway_test(test_server      tests/test_server.cpp)
+add_gateway_test(test_tight_pair  tests/test_tight_pair.cpp)
+add_gateway_test(test_tight_fec   tests/test_tight_fec.cpp)
+add_gateway_test(test_command     tests/test_command.cpp)
+add_gateway_test(test_crypto      tests/test_crypto.cpp)
+add_gateway_test(test_e2e_final   tests/test_e2e_final.cpp)
+add_gateway_test(test_e2e_sim     tests/test_e2e_sim.cpp)
 
-add_executable(test_ratelimit
-    tests/test_ratelimit.cpp
-)
-target_link_libraries(test_ratelimit PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_ratelimit COMMAND test_ratelimit)
-
-add_executable(test_session
-    tests/test_session.cpp
-)
-target_link_libraries(test_session PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_session COMMAND test_session)
-
-add_executable(test_auth
-    tests/test_auth.cpp
-)
-target_link_libraries(test_auth PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_auth COMMAND test_auth)
-
-add_executable(test_server
-    tests/test_server.cpp
-)
-target_link_libraries(test_server PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_server COMMAND test_server)
-
-add_executable(test_e2e
-    tests/test_e2e.cpp
-)
-target_link_libraries(test_e2e PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-# Old SimDevice-based tests (deprecated, replaced by test_e2e_final)
-# add_test(NAME test_e2e COMMAND test_e2e)
-
-add_executable(test_e2e_v2
-    tests/test_e2e_v2.cpp
-)
-target_link_libraries(test_e2e_v2 PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-# add_test(NAME test_e2e_v2 COMMAND test_e2e_v2)
-# add_test(NAME test_e2e_simple COMMAND test_e2e_simple)
-# add_test(NAME test_e2e_dbg COMMAND test_e2e_dbg)
-
-add_executable(test_e2e_final
-    tests/test_e2e_final.cpp
-)
-target_link_libraries(test_e2e_final PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_e2e_final COMMAND test_e2e_final)
-
-add_executable(test_e2e_sim
-    tests/test_e2e_sim.cpp
-)
-target_link_libraries(test_e2e_sim PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_e2e_sim COMMAND test_e2e_sim)
-
-add_executable(test_tight_pair
-    tests/test_tight_pair.cpp
-)
-target_link_libraries(test_tight_pair PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_tight_pair COMMAND test_tight_pair)
-
-add_executable(test_tight_fec
-    tests/test_tight_fec.cpp
-)
-target_link_libraries(test_tight_fec PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_tight_fec COMMAND test_tight_fec)
-
-add_executable(test_command
-    tests/test_command.cpp
-)
-target_link_libraries(test_command PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_command COMMAND test_command)
-
-add_executable(test_crypto
-    tests/test_crypto.cpp
-)
-target_link_libraries(test_crypto PRIVATE
-    creek
-    gateway_core
-    Threads::Threads
-    ${EXTRA_LIBS}
-)
-add_test(NAME test_crypto COMMAND test_crypto)
+# 早期调试测试（已废弃，不参与 ctest，仅保留编译参考）
+add_executable(test_e2e     tests/test_e2e.cpp)
+target_link_libraries(test_e2e     PRIVATE tight gateway_core Threads::Threads ${EXTRA_LIBS})
+add_executable(test_e2e_v2  tests/test_e2e_v2.cpp)
+target_link_libraries(test_e2e_v2  PRIVATE tight gateway_core Threads::Threads ${EXTRA_LIBS})
 
 install(TARGETS cloud_gateway RUNTIME DESTINATION bin)

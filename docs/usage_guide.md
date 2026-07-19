@@ -42,7 +42,7 @@ cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure
 ```
 
-构建产物：`build/cloud_gateway.exe`（网关主程序）、`build/libcreek.a`（tight 静态库）、各测试可执行文件。
+构建产物：`build/cloud_gateway.exe`（网关主程序）、`build/libtight.a`（tight 静态库）、各测试可执行文件。
 
 ---
 
@@ -80,34 +80,34 @@ curl http://127.0.0.1:9090/metrics
 ### 3.1 最小接入流程
 
 ```cpp
-#include "creek/tight.hpp"
+#include "tight/tight.hpp"
 
-creek::TightConfig cfg;
-cfg.bind  = creek::NetAddress("0.0.0.0", 0);
+tight::TightConfig cfg;
+cfg.bind  = tight::NetAddress("0.0.0.0", 0);
 cfg.id    = "device-001";
 cfg.token = "gateway-shared-secret";
-cfg.role  = creek::LinkRole::Leaf;
+cfg.role  = tight::LinkRole::Leaf;
 
-creek::TightTransport t(cfg);
-t.set_message_callback([](const std::string& peer, creek::Bytes payload) {
+tight::TightTransport t(cfg);
+t.set_message_callback([](const std::string& peer, tight::Bytes payload) {
     std::string json(payload.begin(), payload.end());
     // hello_ack / status / event / text / function_call / pong ...
 });
-t.set_peer_callback([](const creek::PeerEvent& ev) {
-    if (ev.state == creek::LinkState::Online)      { /* 已上线 */ }
-    if (ev.state == creek::LinkState::Closed)      { /* 已离线 */ }
+t.set_peer_callback([](const tight::PeerEvent& ev) {
+    if (ev.state == tight::LinkState::Online)      { /* 已上线 */ }
+    if (ev.state == tight::LinkState::Closed)      { /* 已离线 */ }
 });
-t.set_command_callback([](const std::string& peer, creek::Bytes payload) {
+t.set_command_callback([](const std::string& peer, tight::Bytes payload) {
     // 保序命令（云端控制/按键）
 });
 
 if (!t.start()) return 1;
-t.connect({"gateway-9443", creek::NetAddress("网关IP", 9443)});
+t.connect({"gateway-9443", tight::NetAddress("网关IP", 9443)});
 
 // 入网（JSON 协议见 3.3）
 std::string hello = R"({"type":"hello","product_id":"p1","product_key":"k1",
                         "product_secret":"s1","device_name":"device-001"})";
-t.send("gateway-9443", creek::Bytes(hello.begin(), hello.end()));
+t.send("gateway-9443", tight::Bytes(hello.begin(), hello.end()));
 ```
 
 握手成功后自动完成：ECDH 密钥协商（数据加密开启时）→ 双向 100KB 测速 → 带宽基线校准。业务无需干预。
@@ -141,7 +141,7 @@ t.send("gateway-9443", creek::Bytes(hello.begin(), hello.end()));
 t.send_command("gateway-9443", {'v','o','l','+',});
 
 // 接收（保序投递；乱序最多等待 3×RTT，缺口超时跳过，迟到包丢弃）
-t.set_command_callback([](const std::string& peer, creek::Bytes payload) { ... });
+t.set_command_callback([](const std::string& peer, tight::Bytes payload) { ... });
 ```
 
 命令与数据共用加密通道（ECDH 协商后自动加密），但**不占数据序列号、不走 FEC/重组**，发送时插队优先。
@@ -233,4 +233,4 @@ dev.wait_for_json_containing("pong");
 | 丢包率高 | 提高 `initial_bandwidth_bytes` 或确认测速结果；查看网关日志 `Metrics|` 行 |
 | 命令延迟/丢失 | 命令为单报文 UDP：乱序窗口 3×RTT 后跳过；检查是否超过 mtu−48 被 `send_command` 拒绝（返回 false） |
 | 加密未启用 | 两端 `encryption_enabled` 需一致开启；低阶点公钥会自动回退明文并打 WARN 日志 |
-| 调试日志 | `creek::Logger::instance().set_level(creek::LogLevel::Debug)` |
+| 调试日志 | `tight::Logger::instance().set_level(tight::LogLevel::Debug)` |

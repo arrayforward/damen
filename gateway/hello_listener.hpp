@@ -5,7 +5,7 @@
 
 #include "gateway/gateway_context.hpp"
 
-#include "creek/logger.hpp"
+#include "tight/logger.hpp"
 
 #include <string>
 #include <utility>
@@ -34,7 +34,7 @@ private:
         std::string product_secret = extract_json_field(json, "product_secret");
         std::string device_name = extract_json_field(json, "device_name");
 
-        CREEK_LOG_INFO("Device hello from: " + device_name);
+        TIGHT_LOG_INFO("Device hello from: " + device_name);
 
         auto rl = m_ctx->m_ratelimiter->check(device_name, "connection");
         if (!rl.m_allowed) {
@@ -106,7 +106,7 @@ private:
             });
         }
 
-        CREEK_LOG_INFO("Device authenticated: " + device_id +
+        TIGHT_LOG_INFO("Device authenticated: " + device_id +
                        " session: " + session_id);
     }
 

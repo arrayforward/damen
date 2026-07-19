@@ -1,6 +1,6 @@
 #include "tests/test_framework.hpp"
 
-#include "creek/tight.hpp"
+#include "tight/tight.hpp"
 #include "gateway/gateway_server.hpp"
 
 #include <chrono>
@@ -14,33 +14,33 @@ TEST_CASE("e2e_step_by_step") {
 
     printf("=== Step 1: raw tight pair\n");
     {
-        creek::TightConfig sc;
-        sc.bind = creek::NetAddress("127.0.0.1", p);
+        tight::TightConfig sc;
+        sc.bind = tight::NetAddress("127.0.0.1", p);
         sc.id = "s";
         sc.token = "tok";
-        sc.role = creek::LinkRole::Node;
+        sc.role = tight::LinkRole::Node;
         sc.mtu = 1400;
 
-        creek::TightTransport s(sc);
+        tight::TightTransport s(sc);
         std::atomic<int> sev{0};
-        s.set_peer_callback([&](const creek::PeerEvent&) { ++sev; });
+        s.set_peer_callback([&](const tight::PeerEvent&) { ++sev; });
         ASSERT_TRUE(s.start());
 
-        creek::TightConfig cc;
-        cc.bind = creek::NetAddress("127.0.0.1", p + 1);
+        tight::TightConfig cc;
+        cc.bind = tight::NetAddress("127.0.0.1", p + 1);
         cc.id = "c";
         cc.token = "tok";
-        cc.role = creek::LinkRole::Leaf;
+        cc.role = tight::LinkRole::Leaf;
         cc.mtu = 1400;
 
-        creek::TightTransport cl(cc);
+        tight::TightTransport cl(cc);
         std::atomic<int> cev{0};
-        cl.set_peer_callback([&](const creek::PeerEvent&) { ++cev; });
+        cl.set_peer_callback([&](const tight::PeerEvent&) { ++cev; });
         ASSERT_TRUE(cl.start());
 
-        creek::RemotePeer rp;
+        tight::RemotePeer rp;
         rp.id = "s";
-        rp.address = creek::NetAddress("127.0.0.1", p);
+        rp.address = tight::NetAddress("127.0.0.1", p);
         ASSERT_TRUE(cl.connect(rp));
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         ASSERT_GE(sev.load(), 1);
@@ -66,26 +66,26 @@ TEST_CASE("e2e_step_by_step") {
         ASSERT_TRUE(gw.start());
         printf("  Gateway started on port %u\n", p);
 
-        creek::TightConfig cc;
-        cc.bind = creek::NetAddress("127.0.0.1", p + 1);
+        tight::TightConfig cc;
+        cc.bind = tight::NetAddress("127.0.0.1", p + 1);
         cc.id = "cli2";
         cc.token = "tok";
-        cc.role = creek::LinkRole::Leaf;
+        cc.role = tight::LinkRole::Leaf;
         cc.mtu = 1400;
         cc.dead_timeout = std::chrono::seconds(30);
 
-        creek::TightTransport cl(cc);
+        tight::TightTransport cl(cc);
         std::atomic<int> cev{0};
-        cl.set_peer_callback([&](const creek::PeerEvent& ev) {
+        cl.set_peer_callback([&](const tight::PeerEvent& ev) {
             printf("  [CLI] peer ev: state=%d id=%s\n",
                    (int)ev.state, ev.id.c_str());
             ++cev;
         });
         ASSERT_TRUE(cl.start());
 
-        creek::RemotePeer rp;
+        tight::RemotePeer rp;
         rp.id = "gw";
-        rp.address = creek::NetAddress("127.0.0.1", p);
+        rp.address = tight::NetAddress("127.0.0.1", p);
         ASSERT_TRUE(cl.connect(rp));
         printf("  Client connected, waiting for handshake...\n");
 
@@ -116,11 +116,11 @@ TEST_CASE("e2e_step_by_step") {
         gw.set_downstream_callback([&](const gateway::GatewayMessage&) { ++ds; });
         ASSERT_TRUE(gw.start());
 
-        creek::TightConfig cc;
-        cc.bind = creek::NetAddress("127.0.0.1", p + 1);
+        tight::TightConfig cc;
+        cc.bind = tight::NetAddress("127.0.0.1", p + 1);
         cc.id = "cli3";
         cc.token = "tok";
-        cc.role = creek::LinkRole::Leaf;
+        cc.role = tight::LinkRole::Leaf;
         cc.mtu = 1400;
         cc.dead_timeout = std::chrono::seconds(30);
 
@@ -128,19 +128,19 @@ TEST_CASE("e2e_step_by_step") {
         std::vector<std::string> cmsgs;
         std::mutex cmtx;
 
-        creek::TightTransport cl(cc);
-        cl.set_peer_callback([&](const creek::PeerEvent&) { ++cev; });
+        tight::TightTransport cl(cc);
+        cl.set_peer_callback([&](const tight::PeerEvent&) { ++cev; });
         cl.set_message_callback(
-            [&](const std::string&, creek::Bytes p) {
+            [&](const std::string&, tight::Bytes p) {
                 std::lock_guard<std::mutex> lk(cmtx);
                 cmsgs.emplace_back(p.begin(), p.end());
                 printf("  [CLI] got: %s\n", cmsgs.back().c_str());
             });
         ASSERT_TRUE(cl.start());
 
-        creek::RemotePeer rp;
+        tight::RemotePeer rp;
         rp.id = "gw3";
-        rp.address = creek::NetAddress("127.0.0.1", p);
+        rp.address = tight::NetAddress("127.0.0.1", p);
         ASSERT_TRUE(cl.connect(rp));
 
         for (int i = 0; i < 30; ++i) {
@@ -152,7 +152,7 @@ TEST_CASE("e2e_step_by_step") {
         std::string hello = "{\"type\":\"hello\",\"product_id\":\"p\","
             "\"product_key\":\"k\",\"product_secret\":\"s\","
             "\"device_name\":\"cli3\"}";
-        cl.send("gw3", creek::Bytes(hello.begin(), hello.end()));
+        cl.send("gw3", tight::Bytes(hello.begin(), hello.end()));
 
         for (int i = 0; i < 30; ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));

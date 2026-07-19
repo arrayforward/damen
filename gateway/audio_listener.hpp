@@ -5,7 +5,7 @@
 
 #include "gateway/gateway_context.hpp"
 
-#include "creek/logger.hpp"
+#include "tight/logger.hpp"
 
 #include <utility>
 #include <vector>
@@ -43,7 +43,7 @@ private:
     }
 
     void on_audio_boundary(const GatewayMessage& msg) {
-        CREEK_LOG_DEBUG("Audio boundary from: " + msg.m_device_id);
+        TIGHT_LOG_DEBUG("Audio boundary from: " + msg.m_device_id);
         if (m_ctx->m_downstream) {
             m_ctx->m_schedule_io([ctx = m_ctx, msg = msg]() {
                 ctx->m_downstream(msg);

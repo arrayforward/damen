@@ -31,11 +31,11 @@ TEST_CASE("e2e_gateway_client_hello_ack") {
     ASSERT_TRUE(server.start());
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    creek::TightConfig client_cfg;
-    client_cfg.bind = creek::NetAddress("127.0.0.1", port + 1);
+    tight::TightConfig client_cfg;
+    client_cfg.bind = tight::NetAddress("127.0.0.1", port + 1);
     client_cfg.id = "device-e2e";
     client_cfg.token = "shared-secret";
-    client_cfg.role = creek::LinkRole::Leaf;
+    client_cfg.role = tight::LinkRole::Leaf;
     client_cfg.mtu = 1400;
     client_cfg.dead_timeout = std::chrono::seconds(30);
 
@@ -43,18 +43,18 @@ TEST_CASE("e2e_gateway_client_hello_ack") {
     std::mutex client_mutex;
     std::vector<std::string> client_msgs;
 
-    creek::TightTransport client(client_cfg);
-    client.set_peer_callback([&](const creek::PeerEvent&) { ++client_events; });
+    tight::TightTransport client(client_cfg);
+    client.set_peer_callback([&](const tight::PeerEvent&) { ++client_events; });
     client.set_message_callback(
-        [&](const std::string&, creek::Bytes p) {
+        [&](const std::string&, tight::Bytes p) {
             std::lock_guard<std::mutex> lock(client_mutex);
             client_msgs.push_back(std::string(p.begin(), p.end()));
         });
     ASSERT_TRUE(client.start());
 
-    creek::RemotePeer server_peer;
+    tight::RemotePeer server_peer;
     server_peer.id = cfg.m_tight.id;
-    server_peer.address = creek::NetAddress("127.0.0.1", port);
+    server_peer.address = tight::NetAddress("127.0.0.1", port);
     ASSERT_TRUE(client.connect(server_peer));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -66,7 +66,7 @@ TEST_CASE("e2e_gateway_client_hello_ack") {
         "\"product_secret\":\"test-sec\","
         "\"device_name\":\"device-e2e\""
         "}";
-    creek::Bytes payload(hello_json.begin(), hello_json.end());
+    tight::Bytes payload(hello_json.begin(), hello_json.end());
     client.send(cfg.m_tight.id, std::move(payload));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -96,28 +96,28 @@ TEST_CASE("e2e_gateway_client_ping_pong") {
     ASSERT_TRUE(server.start());
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    creek::TightConfig client_cfg;
-    client_cfg.bind = creek::NetAddress("127.0.0.1", port + 1);
+    tight::TightConfig client_cfg;
+    client_cfg.bind = tight::NetAddress("127.0.0.1", port + 1);
     client_cfg.id = "device-ping";
     client_cfg.token = "shared-secret";
-    client_cfg.role = creek::LinkRole::Leaf;
+    client_cfg.role = tight::LinkRole::Leaf;
     client_cfg.mtu = 1400;
     client_cfg.dead_timeout = std::chrono::seconds(30);
 
     std::mutex c_mutex;
     std::vector<std::string> c_msgs;
 
-    creek::TightTransport client(client_cfg);
+    tight::TightTransport client(client_cfg);
     client.set_message_callback(
-        [&](const std::string&, creek::Bytes p) {
+        [&](const std::string&, tight::Bytes p) {
             std::lock_guard<std::mutex> lock(c_mutex);
             c_msgs.push_back(std::string(p.begin(), p.end()));
         });
     ASSERT_TRUE(client.start());
 
-    creek::RemotePeer server_peer;
+    tight::RemotePeer server_peer;
     server_peer.id = cfg.m_tight.id;
-    server_peer.address = creek::NetAddress("127.0.0.1", port);
+    server_peer.address = tight::NetAddress("127.0.0.1", port);
     ASSERT_TRUE(client.connect(server_peer));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -129,11 +129,11 @@ TEST_CASE("e2e_gateway_client_ping_pong") {
         "\"product_secret\":\"s\","
         "\"device_name\":\"device-ping\""
         "}";
-    client.send(cfg.m_tight.id, creek::Bytes(hello.begin(), hello.end()));
+    client.send(cfg.m_tight.id, tight::Bytes(hello.begin(), hello.end()));
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     std::string ping = "{\"type\":\"ping\",\"device_id\":\"device-ping\"}";
-    client.send(cfg.m_tight.id, creek::Bytes(ping.begin(), ping.end()));
+    client.send(cfg.m_tight.id, tight::Bytes(ping.begin(), ping.end()));
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     {
@@ -170,20 +170,20 @@ TEST_CASE("e2e_gateway_downstream_forwarding") {
     ASSERT_TRUE(server.start());
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    creek::TightConfig client_cfg;
-    client_cfg.bind = creek::NetAddress("127.0.0.1", port + 1);
+    tight::TightConfig client_cfg;
+    client_cfg.bind = tight::NetAddress("127.0.0.1", port + 1);
     client_cfg.id = "device-ds";
     client_cfg.token = "shared-secret";
-    client_cfg.role = creek::LinkRole::Leaf;
+    client_cfg.role = tight::LinkRole::Leaf;
     client_cfg.mtu = 1400;
     client_cfg.dead_timeout = std::chrono::seconds(30);
 
-    creek::TightTransport client(client_cfg);
+    tight::TightTransport client(client_cfg);
     ASSERT_TRUE(client.start());
 
-    creek::RemotePeer server_peer;
+    tight::RemotePeer server_peer;
     server_peer.id = cfg.m_tight.id;
-    server_peer.address = creek::NetAddress("127.0.0.1", port);
+    server_peer.address = tight::NetAddress("127.0.0.1", port);
     ASSERT_TRUE(client.connect(server_peer));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -195,19 +195,19 @@ TEST_CASE("e2e_gateway_downstream_forwarding") {
         "\"product_secret\":\"psec\","
         "\"device_name\":\"device-ds\""
         "}";
-    client.send(cfg.m_tight.id, creek::Bytes(hello.begin(), hello.end()));
+    client.send(cfg.m_tight.id, tight::Bytes(hello.begin(), hello.end()));
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     std::string cfg_update = "{\"type\":\"config_update\","
         "\"device_id\":\"device-ds\","
         "\"body\":{\"voice_type\":\"Warm_Girl\"}}";
-    client.send(cfg.m_tight.id, creek::Bytes(cfg_update.begin(), cfg_update.end()));
+    client.send(cfg.m_tight.id, tight::Bytes(cfg_update.begin(), cfg_update.end()));
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     ASSERT_GE(ds_count.load(), 1);
 
     std::string bye = "{\"type\":\"bye\",\"device_id\":\"device-ds\"}";
-    client.send(cfg.m_tight.id, creek::Bytes(bye.begin(), bye.end()));
+    client.send(cfg.m_tight.id, tight::Bytes(bye.begin(), bye.end()));
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
     ASSERT_GE(ds_count.load(), 1);
@@ -225,28 +225,28 @@ TEST_CASE("e2e_gateway_auth_failure") {
     ASSERT_TRUE(server.start());
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    creek::TightConfig client_cfg;
-    client_cfg.bind = creek::NetAddress("127.0.0.1", port + 1);
+    tight::TightConfig client_cfg;
+    client_cfg.bind = tight::NetAddress("127.0.0.1", port + 1);
     client_cfg.id = "device-authfail";
     client_cfg.token = "shared-secret";
-    client_cfg.role = creek::LinkRole::Leaf;
+    client_cfg.role = tight::LinkRole::Leaf;
     client_cfg.mtu = 1400;
     client_cfg.dead_timeout = std::chrono::seconds(30);
 
     std::mutex cmutex;
     std::vector<std::string> cmsgs;
 
-    creek::TightTransport client(client_cfg);
+    tight::TightTransport client(client_cfg);
     client.set_message_callback(
-        [&](const std::string&, creek::Bytes p) {
+        [&](const std::string&, tight::Bytes p) {
             std::lock_guard<std::mutex> lock(cmutex);
             cmsgs.push_back(std::string(p.begin(), p.end()));
         });
     ASSERT_TRUE(client.start());
 
-    creek::RemotePeer server_peer;
+    tight::RemotePeer server_peer;
     server_peer.id = cfg.m_tight.id;
-    server_peer.address = creek::NetAddress("127.0.0.1", port);
+    server_peer.address = tight::NetAddress("127.0.0.1", port);
     ASSERT_TRUE(client.connect(server_peer));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -258,7 +258,7 @@ TEST_CASE("e2e_gateway_auth_failure") {
         "\"product_secret\":\"\","
         "\"device_name\":\"\""
         "}";
-    client.send(cfg.m_tight.id, creek::Bytes(bad_hello.begin(), bad_hello.end()));
+    client.send(cfg.m_tight.id, tight::Bytes(bad_hello.begin(), bad_hello.end()));
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     {

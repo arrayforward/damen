@@ -1,6 +1,6 @@
 #pragma once
 
-#include "creek/types.hpp"
+#include "tight/types.hpp"
 
 #include <chrono>
 #include <cstdint>

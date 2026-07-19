@@ -8,26 +8,28 @@
 
 ### 1. 总体结构
 
+tight 为**独立封装的库**（`tight/` 目录自包含，可单独构建或被父项目 `add_subdirectory` 引用）：
+
 ```
-creek/tight.hpp                 公共 API（TightTransport）
+tight/include/tight/tight.hpp   公共 API（TightTransport，namespace tight）
         │
-tight/transport.cpp             TightTransport::Impl —— 核心调度
-        ├── tight/reassembler.*   入向数据通路（重组 + RS 恢复 + 慢包统计）
-        ├── tight/fragmenter.*    出向数据通路（分片 + RS 校验生成）
-        ├── tight/report.*        链路报告（ACK 剪枝 + 丢包重传 + 带宽回传）
-        ├── tight/command.*       命令通道（保序 + 乱序窗口）
-        ├── tight/crypto.*        X25519 / SHA-256 / HKDF / AES-256-GCM
-        ├── tight/fec.cpp         Reed-Solomon 擦除码（GF(2⁸)）
-        ├── tight/bandwidth.cpp   BBR 带宽估算器
-        ├── tight/packet_codec.cpp 线格式编解码 + CRC32
-        └── tight/peer.hpp 等     Peer 状态、平台 socket、线格式常量
+tight/src/transport.cpp         TightTransport::Impl —— 核心调度
+        ├── src/reassembler.*     入向数据通路（重组 + RS 恢复 + 慢包统计）
+        ├── src/fragmenter.*      出向数据通路（分片 + RS 校验生成）
+        ├── src/report.*          链路报告（ACK 剪枝 + 丢包重传 + 带宽回传）
+        ├── src/command.*         命令通道（保序 + 乱序窗口）
+        ├── src/crypto.*          X25519 / SHA-256 / HKDF / AES-256-GCM
+        ├── src/fec.cpp           Reed-Solomon 擦除码（GF(2⁸)）
+        ├── src/bandwidth.cpp     BBR 带宽估算器
+        ├── src/packet_codec.cpp  线格式编解码 + CRC32
+        └── src/peer.hpp 等       Peer 状态、平台 socket、线格式常量
 ```
 
-命名空间：公共 API 在 `creek`，内部实现细节在 `creek::tight_detail`。
+封装边界：`include/tight/` 为公共接口（`#include "tight/tight.hpp"`），`src/` 为私有实现不对外暴露。命名空间：公共 API 在 `tight`，内部实现细节在 `tight::tight_detail`。
 
 ### 2. 线程模型（4 线程）
 
-`TightTransport::Impl` 在 `start()` 时启动 4 个线程（`tight/transport.cpp`）：
+`TightTransport::Impl` 在 `start()` 时启动 4 个线程（`tight/src/transport.cpp`）：
 
 | 线程 | 职责 |
 |---|---|
@@ -38,7 +40,7 @@ tight/transport.cpp             TightTransport::Impl —— 核心调度
 
 锁纪律：`m_peers_mutex`（peer 表）→ `peer.m_mu`（peer 内部状态）固定顺序；回调（消息/命令/事件）先拷贝 `std::function` 再在锁外触发。
 
-### 3. 线格式（48 字节头，`tight/packet_codec.cpp`）
+### 3. 线格式（48 字节头，`tight/src/packet_codec.cpp`）
 
 ```
 偏移  长度  字段
@@ -83,7 +85,7 @@ Data=5  Parity=6  Ack=7  Report=8  Probe=9  Command=10
 - 心跳：每 `heartbeat`（默认 5s）携带本端 RTT 估计；`dead_timeout`（默认 30s）未收到任何报文则 Closed，`Node` 角色自动重连
 - 下线：析构/`stop()` 广播 Bye
 
-### 5. ECDH + AEAD（`tight/crypto.cpp`）
+### 5. ECDH + AEAD（`tight/src/crypto.cpp`）
 
 - **密钥交换**：握手负载尾部追加 32 字节 X25519 公钥。双方各自计算
   `shared = X25519(本地私钥, 对端公钥)`，低阶点（全零）则放弃加密
@@ -103,7 +105,7 @@ Data=5  Parity=6  Ack=7  Report=8  Probe=9  Command=10
 - 接收侧维护 `m_missing_seqs` 缺口表，每个 report 周期（默认 1s）把超时缺口（> 3.5×RTT，下限 100ms）列入丢包清单
 - 发送侧 `Report::handle`：按 ACK 游标剪枝 pending，对清单内丢包立即重传（≤10 次）
 
-### 7. Reed-Solomon FEC（`tight/fec.cpp`）
+### 7. Reed-Solomon FEC（`tight/src/fec.cpp`）
 
 - 编码：Vandermonde 系数矩阵 `coef(i,j) = (j+1)^i`，第 i 个校验分片为全部数据分片的 GF(2⁸) 线性组合（i=0 时退化为 XOR）
 - 解码：伴随式 + GF 高斯消元，任意 p 个校验分片恢复任意 p 个丢失分片
@@ -111,7 +113,7 @@ Data=5  Parity=6  Ack=7  Report=8  Probe=9  Command=10
   `冗余率 = H(迟到率) × 1.2`，`H(p) = -p·log₂(p) - (1-p)·log₂(1-p)`，
   `parity = clamp(ceil(data_count × 冗余率), 1, 3)`。干净链路 H(0)=0 → 保底 1 片
 
-### 8. 时钟对表与慢包统计（`tight/transport.cpp` `tight/peer.hpp`）
+### 8. 时钟对表与慢包统计（`tight/src/transport.cpp` `tight/src/peer.hpp`）
 
 - **对表**：`offset = (对端tick − 本地到达) − RTT/2`，握手时建立（无 RTT 样本则挂起，首个 ACK 补算），**每次心跳重对表**（`offset = (offset×7 + 新样本)/8` 跟踪漂移）。偏移按 peer 存储，本地时间不变
 - **单向传输时间**：`transit = (到达时刻 − 报文tick) + offset`（`transit_time_us`）
@@ -119,7 +121,7 @@ Data=5  Parity=6  Ack=7  Report=8  Probe=9  Command=10
 - **上报**：report offset 4 字段携带 `慢包率 × 10000`，每周期清零
 - **消费**：对端收到后写入 `m_peer_late_ratio` → ① 驱动 RS 冗余率 ② 作为 BBR 辅助增益信号
 
-### 9. RTT 与 BBR 带宽估算（`tight/bandwidth.cpp`）
+### 9. RTT 与 BBR 带宽估算（`tight/src/bandwidth.cpp`）
 
 - **RTT 三来源**：① ACK 往返（主）② 心跳单向传输 ×2 ③ report 单向传输 ×2（基于时钟偏移）
 - **BtlBw**：投递率（ACK 字节数 / ACK RTT）的 10 样本窗口最大值；**RTprop**：历史最小 RTT
@@ -127,14 +129,14 @@ Data=5  Parity=6  Ack=7  Report=8  Probe=9  Command=10
   - 主信号 RTT 趋势：`RTT ≥ 1.5×RTprop`（或上升且 ≥1.2×）→ drain 0.75；`RTT ≤ 1.1×RTprop` 且未上升 → probe 1.25；否则 cruise 1.0
   - 辅助信号迟到率：≥10%（或上升且 ≥2%）→ 压至 0.75；>2% → 取消 probe；只下压不上调
 
-### 10. 建连测速（`tight/transport.cpp` `tight/peer.hpp`）
+### 10. 建连测速（`tight/src/transport.cpp` `tight/src/peer.hpp`）
 
 - Online 后双方各发 `speed_test_bytes`（默认 100KB）空白 Probe 列车——**直发 socket，绕开令牌桶**（否则测到的是自身限速）
 - 接收方按 20ms 间隙聚合列车：`带宽 = 总线上字节 / (末包到达 − 首包到达)`
 - 下一 report 尾部 4 字节回传；发送方 `seed_bandwidth()` 设为 BtlBw 基线与下限
 - `speed_test_enabled` 可整体关闭
 
-### 11. 命令通道（`tight/command.cpp`）
+### 11. 命令通道（`tight/src/command.cpp`）
 
 - 用途：控制/按键信息；单报文（≤ mtu−48，超限 `send_command` 返回 false），不分片不重组
 - 发送：跳过发送队列/reactor 节拍/编码线程，直入出站队列（插队）

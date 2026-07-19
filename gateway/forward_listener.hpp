@@ -5,7 +5,7 @@
 
 #include "gateway/gateway_context.hpp"
 
-#include "creek/logger.hpp"
+#include "tight/logger.hpp"
 
 #include <utility>
 #include <vector>
@@ -28,12 +28,12 @@ public:
 
 private:
     void on_config_update(const GatewayMessage& msg) {
-        CREEK_LOG_DEBUG("Config update from: " + msg.m_device_id);
+        TIGHT_LOG_DEBUG("Config update from: " + msg.m_device_id);
         forward(msg);
     }
 
     void on_function_call_output(const GatewayMessage& msg) {
-        CREEK_LOG_DEBUG("Function call output from: " + msg.m_device_id);
+        TIGHT_LOG_DEBUG("Function call output from: " + msg.m_device_id);
         forward(msg);
     }
 

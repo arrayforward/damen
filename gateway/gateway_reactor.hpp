@@ -2,7 +2,7 @@
 
 #include "gateway/gateway_channel.hpp"
 #include "gateway/gateway_types.hpp"
-#include "creek/blocking_queue.hpp"
+#include "tight/blocking_queue.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -118,7 +118,7 @@ private:
 
     std::atomic<std::uint64_t> m_task_id_counter{1};
 
-    bool submit(creek::BlockingQueue<Task>& queue, Task task) {
+    bool submit(tight::BlockingQueue<Task>& queue, Task task) {
         task.m_id = m_task_id_counter.fetch_add(1, std::memory_order_relaxed);
         task.m_created_at = std::chrono::steady_clock::now();
         return queue.try_push(std::move(task));
@@ -223,8 +223,8 @@ private:
     }
 
     std::shared_ptr<CopyChannel<GatewayMessage>> m_inbox;
-    creek::BlockingQueue<Task> m_io_queue{256};
-    creek::BlockingQueue<Task> m_cpu_queue{512};
+    tight::BlockingQueue<Task> m_io_queue{256};
+    tight::BlockingQueue<Task> m_cpu_queue{512};
     std::function<void(std::vector<GatewayMessage>&)> m_message_processor;
     std::function<void()> m_data_evolver;
 

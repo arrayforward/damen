@@ -38,28 +38,28 @@ TEST_CASE("e2e_hello_ack") {
     ASSERT_TRUE(gw.start());
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    creek::TightConfig cc;
-    cc.bind = creek::NetAddress("127.0.0.1", 27001);
+    tight::TightConfig cc;
+    cc.bind = tight::NetAddress("127.0.0.1", 27001);
     cc.id = "dev";
     cc.token = "tok";
-    cc.role = creek::LinkRole::Leaf;
+    cc.role = tight::LinkRole::Leaf;
     cc.mtu = 1400;
     cc.dead_timeout = std::chrono::seconds(30);
 
     std::vector<std::string> msgs;
     std::mutex mtx;
     std::atomic<int> ev{0};
-    creek::TightTransport cli(cc);
-    cli.set_peer_callback([&](const creek::PeerEvent&) { ++ev; });
-    cli.set_message_callback([&](const std::string&, creek::Bytes p) {
+    tight::TightTransport cli(cc);
+    cli.set_peer_callback([&](const tight::PeerEvent&) { ++ev; });
+    cli.set_message_callback([&](const std::string&, tight::Bytes p) {
         std::lock_guard<std::mutex> lk(mtx);
         msgs.emplace_back(p.begin(), p.end());
     });
     ASSERT_TRUE(cli.start());
 
-    creek::RemotePeer rp;
+    tight::RemotePeer rp;
     rp.id = "gw-27000";
-    rp.address = creek::NetAddress("127.0.0.1", 27000);
+    rp.address = tight::NetAddress("127.0.0.1", 27000);
     ASSERT_TRUE(cli.connect(rp));
 
     for (int i = 0; i < 30; ++i) {
@@ -71,7 +71,7 @@ TEST_CASE("e2e_hello_ack") {
     std::string hello = "{\"type\":\"hello\",\"product_id\":\"p\","
         "\"product_key\":\"k\",\"product_secret\":\"s\","
         "\"device_name\":\"dev\"}";
-    cli.send("gw-27000", creek::Bytes(hello.begin(), hello.end()));
+    cli.send("gw-27000", tight::Bytes(hello.begin(), hello.end()));
 
     wait_msgs(msgs, mtx, 30);
     {
@@ -94,28 +94,28 @@ TEST_CASE("e2e_ping_pong") {
     ASSERT_TRUE(gw.start());
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    creek::TightConfig cc;
-    cc.bind = creek::NetAddress("127.0.0.1", 27003);
+    tight::TightConfig cc;
+    cc.bind = tight::NetAddress("127.0.0.1", 27003);
     cc.id = "pingdev";
     cc.token = "tok";
-    cc.role = creek::LinkRole::Leaf;
+    cc.role = tight::LinkRole::Leaf;
     cc.mtu = 1400;
     cc.dead_timeout = std::chrono::seconds(30);
 
     std::vector<std::string> msgs;
     std::mutex mtx;
     std::atomic<int> ev{0};
-    creek::TightTransport cli(cc);
-    cli.set_peer_callback([&](const creek::PeerEvent&) { ++ev; });
-    cli.set_message_callback([&](const std::string&, creek::Bytes p) {
+    tight::TightTransport cli(cc);
+    cli.set_peer_callback([&](const tight::PeerEvent&) { ++ev; });
+    cli.set_message_callback([&](const std::string&, tight::Bytes p) {
         std::lock_guard<std::mutex> lk(mtx);
         msgs.emplace_back(p.begin(), p.end());
     });
     ASSERT_TRUE(cli.start());
 
-    creek::RemotePeer rp;
+    tight::RemotePeer rp;
     rp.id = "gw-27002";
-    rp.address = creek::NetAddress("127.0.0.1", 27002);
+    rp.address = tight::NetAddress("127.0.0.1", 27002);
     ASSERT_TRUE(cli.connect(rp));
 
     for (int i = 0; i < 30; ++i) {
@@ -127,12 +127,12 @@ TEST_CASE("e2e_ping_pong") {
     std::string hello = "{\"type\":\"hello\",\"product_id\":\"p\","
         "\"product_key\":\"k\",\"product_secret\":\"s\","
         "\"device_name\":\"pingdev\"}";
-    cli.send("gw-27002", creek::Bytes(hello.begin(), hello.end()));
+    cli.send("gw-27002", tight::Bytes(hello.begin(), hello.end()));
     wait_msgs(msgs, mtx, 30);
 
     msgs.clear();
     std::string ping = "{\"type\":\"ping\",\"device_id\":\"pingdev\"}";
-    cli.send("gw-27002", creek::Bytes(ping.begin(), ping.end()));
+    cli.send("gw-27002", tight::Bytes(ping.begin(), ping.end()));
 
     wait_msgs(msgs, mtx, 15);
     {
@@ -162,28 +162,28 @@ TEST_CASE("e2e_downstream_fwd") {
     ASSERT_TRUE(gw.start());
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    creek::TightConfig cc;
-    cc.bind = creek::NetAddress("127.0.0.1", 27005);
+    tight::TightConfig cc;
+    cc.bind = tight::NetAddress("127.0.0.1", 27005);
     cc.id = "dsdev";
     cc.token = "tok";
-    cc.role = creek::LinkRole::Leaf;
+    cc.role = tight::LinkRole::Leaf;
     cc.mtu = 1400;
     cc.dead_timeout = std::chrono::seconds(30);
 
     std::vector<std::string> msgs;
     std::mutex mtx;
     std::atomic<int> ev{0};
-    creek::TightTransport cli(cc);
-    cli.set_peer_callback([&](const creek::PeerEvent&) { ++ev; });
-    cli.set_message_callback([&](const std::string&, creek::Bytes p) {
+    tight::TightTransport cli(cc);
+    cli.set_peer_callback([&](const tight::PeerEvent&) { ++ev; });
+    cli.set_message_callback([&](const std::string&, tight::Bytes p) {
         std::lock_guard<std::mutex> lk(mtx);
         msgs.emplace_back(p.begin(), p.end());
     });
     ASSERT_TRUE(cli.start());
 
-    creek::RemotePeer rp;
+    tight::RemotePeer rp;
     rp.id = "gw-27004";
-    rp.address = creek::NetAddress("127.0.0.1", 27004);
+    rp.address = tight::NetAddress("127.0.0.1", 27004);
     ASSERT_TRUE(cli.connect(rp));
 
     for (int i = 0; i < 30; ++i) {
@@ -195,17 +195,17 @@ TEST_CASE("e2e_downstream_fwd") {
     std::string hello = "{\"type\":\"hello\",\"product_id\":\"p\","
         "\"product_key\":\"k\",\"product_secret\":\"s\","
         "\"device_name\":\"dsdev\"}";
-    cli.send("gw-27004", creek::Bytes(hello.begin(), hello.end()));
+    cli.send("gw-27004", tight::Bytes(hello.begin(), hello.end()));
     wait_msgs(msgs, mtx, 30);
 
     std::string cfg_upd = "{\"type\":\"config_update\",\"device_id\":\"dsdev\","
         "\"body\":{\"voice_type\":\"Warm_Girl\"}}";
-    cli.send("gw-27004", creek::Bytes(cfg_upd.begin(), cfg_upd.end()));
+    cli.send("gw-27004", tight::Bytes(cfg_upd.begin(), cfg_upd.end()));
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     std::string fc = "{\"type\":\"function_call_output\","
         "\"device_id\":\"dsdev\",\"call_id\":\"c1\",\"output\":\"ok\"}";
-    cli.send("gw-27004", creek::Bytes(fc.begin(), fc.end()));
+    cli.send("gw-27004", tight::Bytes(fc.begin(), fc.end()));
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     ASSERT_GE(ds.load(), 3);
@@ -222,28 +222,28 @@ TEST_CASE("e2e_auth_fail") {
     ASSERT_TRUE(gw.start());
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    creek::TightConfig cc;
-    cc.bind = creek::NetAddress("127.0.0.1", 27007);
+    tight::TightConfig cc;
+    cc.bind = tight::NetAddress("127.0.0.1", 27007);
     cc.id = "baddev";
     cc.token = "tok";
-    cc.role = creek::LinkRole::Leaf;
+    cc.role = tight::LinkRole::Leaf;
     cc.mtu = 1400;
     cc.dead_timeout = std::chrono::seconds(30);
 
     std::vector<std::string> msgs;
     std::mutex mtx;
     std::atomic<int> ev{0};
-    creek::TightTransport cli(cc);
-    cli.set_peer_callback([&](const creek::PeerEvent&) { ++ev; });
-    cli.set_message_callback([&](const std::string&, creek::Bytes p) {
+    tight::TightTransport cli(cc);
+    cli.set_peer_callback([&](const tight::PeerEvent&) { ++ev; });
+    cli.set_message_callback([&](const std::string&, tight::Bytes p) {
         std::lock_guard<std::mutex> lk(mtx);
         msgs.emplace_back(p.begin(), p.end());
     });
     ASSERT_TRUE(cli.start());
 
-    creek::RemotePeer rp;
+    tight::RemotePeer rp;
     rp.id = "gw-27006";
-    rp.address = creek::NetAddress("127.0.0.1", 27006);
+    rp.address = tight::NetAddress("127.0.0.1", 27006);
     ASSERT_TRUE(cli.connect(rp));
 
     for (int i = 0; i < 30; ++i) {
@@ -255,7 +255,7 @@ TEST_CASE("e2e_auth_fail") {
     std::string bad = "{\"type\":\"hello\",\"product_id\":\"\","
         "\"product_key\":\"\",\"product_secret\":\"\","
         "\"device_name\":\"\"}";
-    cli.send("gw-27006", creek::Bytes(bad.begin(), bad.end()));
+    cli.send("gw-27006", tight::Bytes(bad.begin(), bad.end()));
 
     wait_msgs(msgs, mtx, 15);
     {
@@ -280,7 +280,7 @@ TEST_CASE("e2e_multi_device") {
 
     constexpr int N = 3;
     struct Dev {
-        std::unique_ptr<creek::TightTransport> t;
+        std::unique_ptr<tight::TightTransport> t;
         std::vector<std::string> msgs;
         std::mutex mtx;
         std::atomic<int> ev{0};
@@ -288,27 +288,27 @@ TEST_CASE("e2e_multi_device") {
     Dev devs[N];
 
     for (int i = 0; i < N; ++i) {
-        creek::TightConfig cc;
-        cc.bind = creek::NetAddress("127.0.0.1",
+        tight::TightConfig cc;
+        cc.bind = tight::NetAddress("127.0.0.1",
                                      (std::uint16_t)(27009 + i * 2));
         cc.id = "dev" + std::to_string(i);
         cc.token = "tok";
-        cc.role = creek::LinkRole::Leaf;
+        cc.role = tight::LinkRole::Leaf;
         cc.mtu = 1400;
         cc.dead_timeout = std::chrono::seconds(30);
 
         auto& d = devs[i];
-        d.t = std::make_unique<creek::TightTransport>(cc);
-        d.t->set_peer_callback([&](const creek::PeerEvent&) { ++d.ev; });
-        d.t->set_message_callback([&](const std::string&, creek::Bytes p) {
+        d.t = std::make_unique<tight::TightTransport>(cc);
+        d.t->set_peer_callback([&](const tight::PeerEvent&) { ++d.ev; });
+        d.t->set_message_callback([&](const std::string&, tight::Bytes p) {
             std::lock_guard<std::mutex> lk(d.mtx);
             d.msgs.emplace_back(p.begin(), p.end());
         });
         ASSERT_TRUE(d.t->start());
 
-        creek::RemotePeer rp;
+        tight::RemotePeer rp;
         rp.id = "gw-27008";
-        rp.address = creek::NetAddress("127.0.0.1", 27008);
+        rp.address = tight::NetAddress("127.0.0.1", 27008);
         ASSERT_TRUE(d.t->connect(rp));
     }
 
@@ -324,7 +324,7 @@ TEST_CASE("e2e_multi_device") {
         std::string hello = "{\"type\":\"hello\",\"product_id\":\"p\","
             "\"product_key\":\"k\",\"product_secret\":\"s\","
             "\"device_name\":\"dev" + std::to_string(i) + "\"}";
-        devs[i].t->send("gw-27008", creek::Bytes(hello.begin(), hello.end()));
+        devs[i].t->send("gw-27008", tight::Bytes(hello.begin(), hello.end()));
     }
 
     for (int i = 0; i < N; ++i) {
@@ -351,28 +351,28 @@ TEST_CASE("e2e_full_flow") {
     ASSERT_TRUE(gw.start());
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    creek::TightConfig cc;
-    cc.bind = creek::NetAddress("127.0.0.1", 27016);
+    tight::TightConfig cc;
+    cc.bind = tight::NetAddress("127.0.0.1", 27016);
     cc.id = "flodev";
     cc.token = "tok";
-    cc.role = creek::LinkRole::Leaf;
+    cc.role = tight::LinkRole::Leaf;
     cc.mtu = 1400;
     cc.dead_timeout = std::chrono::seconds(30);
 
     std::vector<std::string> msgs;
     std::mutex mtx;
     std::atomic<int> ev{0};
-    creek::TightTransport cli(cc);
-    cli.set_peer_callback([&](const creek::PeerEvent&) { ++ev; });
-    cli.set_message_callback([&](const std::string&, creek::Bytes p) {
+    tight::TightTransport cli(cc);
+    cli.set_peer_callback([&](const tight::PeerEvent&) { ++ev; });
+    cli.set_message_callback([&](const std::string&, tight::Bytes p) {
         std::lock_guard<std::mutex> lk(mtx);
         msgs.emplace_back(p.begin(), p.end());
     });
     ASSERT_TRUE(cli.start());
 
-    creek::RemotePeer rp;
+    tight::RemotePeer rp;
     rp.id = "gw-27015";
-    rp.address = creek::NetAddress("127.0.0.1", 27015);
+    rp.address = tight::NetAddress("127.0.0.1", 27015);
     ASSERT_TRUE(cli.connect(rp));
 
     for (int i = 0; i < 30; ++i) {
@@ -384,12 +384,12 @@ TEST_CASE("e2e_full_flow") {
     std::string hello = "{\"type\":\"hello\",\"product_id\":\"p\","
         "\"product_key\":\"k\",\"product_secret\":\"s\","
         "\"device_name\":\"flodev\"}";
-    cli.send("gw-27015", creek::Bytes(hello.begin(), hello.end()));
+    cli.send("gw-27015", tight::Bytes(hello.begin(), hello.end()));
     wait_msgs(msgs, mtx, 30);
 
     msgs.clear();
     std::string ping = "{\"type\":\"ping\",\"device_id\":\"flodev\"}";
-    cli.send("gw-27015", creek::Bytes(ping.begin(), ping.end()));
+    cli.send("gw-27015", tight::Bytes(ping.begin(), ping.end()));
     wait_msgs(msgs, mtx, 10);
     {
         std::lock_guard<std::mutex> lk(mtx);
@@ -400,16 +400,16 @@ TEST_CASE("e2e_full_flow") {
 
     std::string cfg_upd = "{\"type\":\"config_update\",\"device_id\":\"flodev\","
         "\"body\":{\"voice_type\":\"Warm_Girl\"}}";
-    cli.send("gw-27015", creek::Bytes(cfg_upd.begin(), cfg_upd.end()));
+    cli.send("gw-27015", tight::Bytes(cfg_upd.begin(), cfg_upd.end()));
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
     std::string fc = "{\"type\":\"function_call_output\","
         "\"device_id\":\"flodev\",\"call_id\":\"c1\",\"output\":\"ok\"}";
-    cli.send("gw-27015", creek::Bytes(fc.begin(), fc.end()));
+    cli.send("gw-27015", tight::Bytes(fc.begin(), fc.end()));
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
     std::string bye = "{\"type\":\"bye\",\"device_id\":\"flodev\"}";
-    cli.send("gw-27015", creek::Bytes(bye.begin(), bye.end()));
+    cli.send("gw-27015", tight::Bytes(bye.begin(), bye.end()));
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
     ASSERT_GE(ds.load(), 4);

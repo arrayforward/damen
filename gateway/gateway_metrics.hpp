@@ -1,7 +1,7 @@
 #pragma once
 
 #include "gateway/gateway_blackboard.hpp"
-#include "creek/logger.hpp"
+#include "tight/logger.hpp"
 
 #include <chrono>
 #include <mutex>
@@ -112,7 +112,7 @@ public:
 
     void log_snapshot() {
         auto snapshot = m_board->metrics_snapshot();
-        CREEK_LOG_INFO("Metrics| conn:" + std::to_string(snapshot.m_active_connections) +
+        TIGHT_LOG_INFO("Metrics| conn:" + std::to_string(snapshot.m_active_connections) +
                        " in:" + std::to_string(snapshot.m_messages_in_total) +
                        " out:" + std::to_string(snapshot.m_messages_out_total) +
                        " bytes_in:" + std::to_string(snapshot.m_bytes_in_total) +

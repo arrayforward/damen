@@ -1,7 +1,7 @@
 #include "gateway/gateway_config.hpp"
 #include "gateway/gateway_server.hpp"
 #include "gateway/gateway_metrics_http.hpp"
-#include "creek/logger.hpp"
+#include "tight/logger.hpp"
 
 #include <atomic>
 #include <csignal>
@@ -13,7 +13,7 @@ namespace {
 std::atomic<bool> g_running{true};
 
 void signal_handler(int sig) {
-    creek::Logger::instance().log(creek::LogLevel::Info,
+    tight::Logger::instance().log(tight::LogLevel::Info,
         "Signal " + std::to_string(sig) + " received, shutting down...");
     g_running.store(false);
 }
@@ -34,9 +34,9 @@ void setup_signals() {
 } // anonymous namespace
 
 int main(int argc, char* argv[]) {
-    creek::Logger::instance().set_level(creek::LogLevel::Debug);
-    CREEK_LOG_INFO("=== ConvAI Cloud Gateway v2.0 ===");
-    CREEK_LOG_INFO("Starting with Tight Transport Protocol");
+    tight::Logger::instance().set_level(tight::LogLevel::Debug);
+    TIGHT_LOG_INFO("=== ConvAI Cloud Gateway v2.0 ===");
+    TIGHT_LOG_INFO("Starting with Tight Transport Protocol");
 
     setup_signals();
 
@@ -69,7 +69,7 @@ int main(int argc, char* argv[]) {
 
     server.set_downstream_callback(
         [](const gateway::GatewayMessage& msg) {
-            CREEK_LOG_DEBUG("Downstream: type=" +
+            TIGHT_LOG_DEBUG("Downstream: type=" +
                            std::to_string(static_cast<int>(msg.m_type)) +
                            " device=" + msg.m_device_id +
                            " session=" + msg.m_session_id);
@@ -77,27 +77,27 @@ int main(int argc, char* argv[]) {
 
     server.set_downstream_error_callback(
         [](const std::string& session_id, const std::string& error) {
-            CREEK_LOG_ERROR("Downstream error: session=" + session_id +
+            TIGHT_LOG_ERROR("Downstream error: session=" + session_id +
                             " err=" + error);
         });
 
     if (!server.start()) {
-        CREEK_LOG_ERROR("Failed to start gateway server");
+        TIGHT_LOG_ERROR("Failed to start gateway server");
         return 1;
     }
 
     metrics_server.start();
 
-    CREEK_LOG_INFO("Gateway server running. Press Ctrl+C to stop.");
+    TIGHT_LOG_INFO("Gateway server running. Press Ctrl+C to stop.");
 
     while (g_running.load()) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    CREEK_LOG_INFO("Shutting down...");
+    TIGHT_LOG_INFO("Shutting down...");
     metrics_server.stop();
     server.stop();
 
-    CREEK_LOG_INFO("Gateway server exited cleanly");
+    TIGHT_LOG_INFO("Gateway server exited cleanly");
     return 0;
 }

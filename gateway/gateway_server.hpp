@@ -1,6 +1,6 @@
 #pragma once
 
-#include "creek/tight.hpp"
+#include "tight/tight.hpp"
 #include "gateway/gateway_config.hpp"
 #include "gateway/gateway_types.hpp"
 #include "gateway/gateway_channel.hpp"
@@ -15,7 +15,7 @@
 #include "gateway/audio_listener.hpp"
 #include "gateway/device_listener.hpp"
 #include "gateway/forward_listener.hpp"
-#include "creek/logger.hpp"
+#include "tight/logger.hpp"
 
 #include <atomic>
 #include <functional>
@@ -73,7 +73,7 @@ public:
 
     bool start() {
         if (m_running.load()) return true;
-        CREEK_LOG_INFO("GatewayServer starting...");
+        TIGHT_LOG_INFO("GatewayServer starting...");
 
         m_auth = std::make_shared<AuthService>(
             [this](const std::string& pid, const std::string& pkey,
@@ -84,35 +84,35 @@ public:
         // listener context now.
         m_ctx->m_auth = m_auth;
 
-        creek::TightConfig tc;
-        tc.bind = creek::NetAddress(
+        tight::TightConfig tc;
+        tc.bind = tight::NetAddress(
             m_config.m_tight.host,
             m_config.m_tight.port);
         tc.id = m_config.m_tight.id.empty()
             ? ("gateway-" + std::to_string(m_config.m_tight.port))
             : m_config.m_tight.id;
         tc.token = m_config.m_tight.token;
-        tc.role = creek::LinkRole::Node;
+        tc.role = tight::LinkRole::Node;
         tc.mtu = m_config.m_tight.mtu;
         tc.heartbeat = m_config.m_tight.heartbeat;
         tc.dead_timeout = m_config.m_tight.dead_timeout;
         tc.queue_limit = m_config.m_server.max_payload_bytes;
 
-        m_transport = std::make_unique<creek::TightTransport>(tc);
+        m_transport = std::make_unique<tight::TightTransport>(tc);
         m_transport->set_message_callback(
-            [this](const std::string& peer_id, creek::Bytes payload) {
+            [this](const std::string& peer_id, tight::Bytes payload) {
                 on_tight_message(peer_id, std::move(payload));
             });
         m_transport->set_peer_callback(
-            [this](const creek::PeerEvent& event) {
+            [this](const tight::PeerEvent& event) {
                 on_tight_peer_event(event);
             });
 
         if (!m_transport->start()) {
-            CREEK_LOG_ERROR("Failed to start TightTransport");
+            TIGHT_LOG_ERROR("Failed to start TightTransport");
             return false;
         }
-        CREEK_LOG_INFO("TightTransport started on port " +
+        TIGHT_LOG_INFO("TightTransport started on port " +
                        std::to_string(m_transport->local_port()));
 
         m_reactor->set_message_processor(
@@ -137,19 +137,19 @@ public:
 
         m_reactor->start();
         m_running.store(true);
-        CREEK_LOG_INFO("GatewayServer started successfully");
+        TIGHT_LOG_INFO("GatewayServer started successfully");
         return true;
     }
 
     void stop() {
         if (!m_running.exchange(false)) return;
-        CREEK_LOG_INFO("GatewayServer stopping...");
+        TIGHT_LOG_INFO("GatewayServer stopping...");
         m_reactor->stop();
         m_inbox->close();
         if (m_transport) {
             m_transport->stop();
         }
-        CREEK_LOG_INFO("GatewayServer stopped");
+        TIGHT_LOG_INFO("GatewayServer stopped");
     }
 
     bool send_to_device(const std::string& device_id, const GatewayMessage& msg) {
@@ -259,7 +259,7 @@ private:
         }
     }
 
-    void on_tight_message(const std::string& peer_id, creek::Bytes payload) {
+    void on_tight_message(const std::string& peer_id, tight::Bytes payload) {
         GatewayMessage msg;
         if (!parse_upstream_json(peer_id, payload, msg)) return;
 
@@ -283,7 +283,7 @@ private:
                              GatewayMessage& msg) {
         std::string json(reinterpret_cast<const char*>(payload.data()),
                          payload.size());
-        msg.m_timestamp_ms = creek::unix_millis();
+        msg.m_timestamp_ms = tight::unix_millis();
         msg.m_direction = MessageDirection::DeviceToGateway;
 
         if (json.find("\"hello\"") != std::string::npos ||
@@ -333,10 +333,10 @@ private:
         return true;
     }
 
-    void on_tight_peer_event(const creek::PeerEvent& event) {
+    void on_tight_peer_event(const tight::PeerEvent& event) {
         switch (event.state) {
-        case creek::LinkState::Online:
-        case creek::LinkState::Established: {
+        case tight::LinkState::Online:
+        case tight::LinkState::Established: {
             bool is_new = false;
             {
                 auto* entry = m_board->device(event.id);
@@ -349,7 +349,7 @@ private:
             }
             if (is_new) {
                 m_session->create_session(event.id);
-                CREEK_LOG_INFO("Device online: " + event.id);
+                TIGHT_LOG_INFO("Device online: " + event.id);
 
                 GatewayMessage event_msg;
                 event_msg.m_type = GatewayMessageType::kToDeviceEvent;
@@ -369,9 +369,9 @@ private:
             }
             break;
         }
-        case creek::LinkState::Closed: {
+        case tight::LinkState::Closed: {
             m_board->mark_changed("device:" + event.id);
-            CREEK_LOG_INFO("Device offline: " + event.id);
+            TIGHT_LOG_INFO("Device offline: " + event.id);
             break;
         }
         default: break;
@@ -467,7 +467,7 @@ private:
     }
 
     void heartbeat_check() {
-        auto now = creek::unix_millis();
+        auto now = tight::unix_millis();
         auto snapshot = m_board->device_snapshot();
         for (const auto& [id, state] : snapshot) {
             if (!state.m_connected) continue;
@@ -475,7 +475,7 @@ private:
             auto timeout_ms = static_cast<std::uint64_t>(
                 m_config.m_server.heartbeat_seconds) * 2000;
             if (gap > timeout_ms) {
-                CREEK_LOG_WARN("Device heartbeat timeout: " + id);
+                TIGHT_LOG_WARN("Device heartbeat timeout: " + id);
                 m_session->close_session(id);
                 m_metrics->on_connection_close(id);
                 m_board->mark_changed("device:" + id);
@@ -484,7 +484,7 @@ private:
     }
 
     void session_cleanup() {
-        auto now = creek::unix_millis();
+        auto now = tight::unix_millis();
         auto snapshot = m_board->device_snapshot();
         for (const auto& [id, state] : snapshot) {
             if (state.m_connected) continue;
@@ -492,7 +492,7 @@ private:
             if (gap > static_cast<std::uint64_t>(
                     m_config.m_server.session_timeout.count()) * 1000) {
                 m_board->remove_device(id);
-                CREEK_LOG_DEBUG("Session cleaned up: " + id);
+                TIGHT_LOG_DEBUG("Session cleaned up: " + id);
             }
         }
     }
@@ -505,7 +505,7 @@ private:
     std::shared_ptr<RateLimiter>        m_ratelimiter;
     std::shared_ptr<Metrics>            m_metrics;
     std::shared_ptr<Reactor>            m_reactor;
-    std::unique_ptr<creek::TightTransport> m_transport;
+    std::unique_ptr<tight::TightTransport> m_transport;
 
     DownstreamMsgCallback               m_downstream_cb;
     DownstreamErrCallback               m_downstream_err_cb;

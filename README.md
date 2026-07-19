@@ -15,15 +15,15 @@
 
 | 特性 | 实现位置 | 说明 |
 |---|---|---|
-| 可靠传输 | `tight/transport.cpp` `tight/report.cpp` | ACK 确认 + Report NACK 丢包列表重传（≤10 次），心跳保活，`dead_timeout` 掉线检测与自动重连 |
-| **ECDH + AEAD** | `tight/crypto.{hpp,cpp}` | 握手交换 X25519 公钥（RFC 7748），HKDF-SHA256 派生会话密钥，Data/Parity/Command 负载 AES-256-GCM 加密，报文头前 44 字节作为 AAD 防篡改；`encryption_enabled` 可开关 |
-| **Reed-Solomon FEC** | `tight/fec.cpp` `tight/fragmenter.cpp` `tight/reassembler.cpp` | GF(2⁸) Vandermonde 擦除码，p 个校验分片恢复任意 p 个丢失分片；冗余率 = 迟到率的二元信息熵 H(p) × 1.2 安全系数，clamp [1,3] |
-| 慢包统计 | `tight/reassembler.cpp` | 用时钟偏移计算单向传输时间，超过 `late_rtt_multiplier`（默认 4）× RTT 判为慢包，按 report 周期上报比例 |
-| 时钟对表 | `tight/transport.cpp` `tight/peer.hpp` | 握手对表（偏移 = 对端 tick − 本地到达 − RTT/2），每次心跳平滑重对表（7/8），只存偏移不改本地时间 |
-| BBR 带宽估算 | `tight/bandwidth.cpp` | BtlBw 窗口最大值（10 样本）+ RTprop 最小 RTT；增益以 RTT 趋势为主信号、迟到率为辅助信号 |
-| 建连测速 | `tight/transport.cpp` | Online 后双向互发 100KB Probe 空白列车（直发不限速），接收方按到达时间估算带宽并经 report 回传；`speed_test_enabled` 可开关 |
-| 命令通道 | `tight/command.cpp` | 单报文控制/按键指令（≤ mtu−48），独立序列空间保序投递，乱序最多等待 3×RTT 后跳过缺口，插队直发出站队列 |
-| 限速发送 | `tight/transport.cpp` | 令牌桶按估算带宽 pacing；reactor / receiver / encode / sender 四线程分离 |
+| 可靠传输 | `tight/src/transport.cpp` `tight/src/report.cpp` | ACK 确认 + Report NACK 丢包列表重传（≤10 次），心跳保活，`dead_timeout` 掉线检测与自动重连 |
+| **ECDH + AEAD** | `tight/src/crypto.{hpp,cpp}` | 握手交换 X25519 公钥（RFC 7748），HKDF-SHA256 派生会话密钥，Data/Parity/Command 负载 AES-256-GCM 加密，报文头前 44 字节作为 AAD 防篡改；`encryption_enabled` 可开关 |
+| **Reed-Solomon FEC** | `tight/src/fec.cpp` `tight/src/fragmenter.cpp` `tight/src/reassembler.cpp` | GF(2⁸) Vandermonde 擦除码，p 个校验分片恢复任意 p 个丢失分片；冗余率 = 迟到率的二元信息熵 H(p) × 1.2 安全系数，clamp [1,3] |
+| 慢包统计 | `tight/src/reassembler.cpp` | 用时钟偏移计算单向传输时间，超过 `late_rtt_multiplier`（默认 4）× RTT 判为慢包，按 report 周期上报比例 |
+| 时钟对表 | `tight/src/transport.cpp` `tight/src/peer.hpp` | 握手对表（偏移 = 对端 tick − 本地到达 − RTT/2），每次心跳平滑重对表（7/8），只存偏移不改本地时间 |
+| BBR 带宽估算 | `tight/src/bandwidth.cpp` | BtlBw 窗口最大值（10 样本）+ RTprop 最小 RTT；增益以 RTT 趋势为主信号、迟到率为辅助信号 |
+| 建连测速 | `tight/src/transport.cpp` | Online 后双向互发 100KB Probe 空白列车（直发不限速），接收方按到达时间估算带宽并经 report 回传；`speed_test_enabled` 可开关 |
+| 命令通道 | `tight/src/command.cpp` | 单报文控制/按键指令（≤ mtu−48），独立序列空间保序投递，乱序最多等待 3×RTT 后跳过缺口，插队直发出站队列 |
+| 限速发送 | `tight/src/transport.cpp` | 令牌桶按估算带宽 pacing；reactor / receiver / encode / sender 四线程分离 |
 
 ### 1.2 网关服务
 
@@ -41,24 +41,26 @@
 
 ```
 damen/
-├── creek/                       # 公共头文件（对外 API，namespace creek）
-│   ├── types.hpp                #   基础类型 + TightConfig 全部配置项
-│   ├── tight.hpp                #   TightTransport 主接口（聚合子头）
-│   ├── tight/                   #   PacketCodec / ReedSolomon / BandwidthEstimator 公共子头
-│   ├── blocking_queue.hpp       #   BlockingQueue<T> 有界阻塞队列
-│   └── logger.hpp               #   Logger 单例 + CREEK_LOG_* 宏
-├── tight/                       # tight 协议实现（namespace creek::tight_detail）
-│   ├── transport.cpp            #   核心：线程模型、控制面、收发调度、对表、测速、ECDH/AEAD 挂钩
-│   ├── crypto.{hpp,cpp}         #   X25519 / SHA-256 / HKDF / AES-256-GCM（纯 C++）
-│   ├── reassembler.*            #   入向：序列跟踪 + 慢包统计 + 重组 + RS 恢复
-│   ├── fragmenter.*             #   出向：分片 + 熵驱动 RS 冗余
-│   ├── report.*                 #   报告构建（慢包率/丢包/测速带宽）与处理（重传）
-│   ├── command.*                #   命令通道：保序 + 3×RTT 乱序窗口
-│   ├── peer.hpp                 #   Peer 状态 + transit_time_us / finalize_probe_train
-│   ├── packet_codec.cpp         #   48 字节线格式编解码 + CRC32
-│   ├── fec.cpp                  #   Reed-Solomon 编解码（GF(2⁸) 高斯消元）
-│   ├── bandwidth.cpp            #   BBR 带宽估算器
-│   └── address/wsa/crc32/socket_platform/wire_format   # 平台与工具
+├── tight/                       # ★ tight 协议独立库（namespace tight，可单独构建/复用）
+│   ├── CMakeLists.txt           #   库独立构建文件（add_subdirectory / install 两用）
+│   ├── include/tight/           #   公共接口头（对外 API）
+│   │   ├── tight.hpp            #     TightTransport 主接口（聚合子头）
+│   │   ├── types.hpp            #     基础类型 + TightConfig 全部配置项
+│   │   ├── packet_codec.hpp     #     48 字节线格式编解码 + CRC32
+│   │   ├── fec.hpp              #     ReedSolomon：GF(2⁸) 擦除码
+│   │   ├── bandwidth.hpp        #     BandwidthEstimator：BBR 带宽估算器
+│   │   ├── blocking_queue.hpp   #     BlockingQueue<T> 有界阻塞队列
+│   │   └── logger.hpp           #     Logger 单例 + TIGHT_LOG_* 宏
+│   └── src/                     #   私有实现（不对外暴露）
+│       ├── transport.cpp        #     核心：线程模型、控制面、收发调度、ECDH/AEAD 挂钩
+│       ├── crypto.{hpp,cpp}     #     X25519 / SHA-256 / HKDF / AES-256-GCM（纯 C++）
+│       ├── reassembler.*        #     入向：序列跟踪 + 慢包统计 + 重组 + RS 恢复
+│       ├── fragmenter.*         #     出向：分片 + 熵驱动 RS 冗余
+│       ├── report.*             #     报告构建/处理（慢包率/丢包重传/带宽回传）
+│       ├── command.*            #     命令通道：保序 + 3×RTT 乱序窗口
+│       ├── packet_codec.cpp / fec.cpp / bandwidth.cpp
+│       └── peer.hpp + address/wsa/crc32/socket_platform/wire_format
+├── client/                      # ★ tight_client：设备端直连测试工具（交互式 CLI）
 ├── gateway/                     # 网关服务（namespace gateway）
 │   ├── gateway_server.hpp       #   GatewayServer 骨架：分发器/定时器/tight 接入/JSON 编解码
 │   ├── gateway_context.hpp      #   监听器共享上下文（服务句柄 + IO 钩子）
@@ -103,30 +105,51 @@ ctest --test-dir build --output-on-failure
 
 默认（`gateway/gateway_main.cpp`）：tight UDP `0.0.0.0:9443`，token `gateway-shared-secret`，mtu 1400；指标 HTTP `:9090/metrics`；Ctrl+C 优雅退出。
 
-### 3.3 设备最小接入示例
+### 3.3 设备直连测试工具（client/）
+
+```bash
+# 启动网关后，另开终端运行交互式设备客户端
+./build/client/tight_client --host 127.0.0.1 --port 9443
+# 交互命令: hello | ping | bye | send <文本> | audio [帧数] |
+#           config <json> | cmd <文本> | peers | help | quit
+```
+
+### 3.4 tight 库独立使用
+
+```cmake
+# 在你的项目中直接引用 tight 库（自包含，零第三方依赖）
+add_subdirectory(tight)
+target_link_libraries(your_app PRIVATE tight)
+```
 
 ```cpp
-#include "creek/tight.hpp"
+#include "tight/tight.hpp"   // 命名空间 tight::，详见 docs/api_reference.md
+```
 
-creek::TightConfig cfg;
-cfg.bind  = creek::NetAddress("0.0.0.0", 0);
+### 3.5 设备最小接入示例
+
+```cpp
+#include "tight/tight.hpp"
+
+tight::TightConfig cfg;
+cfg.bind  = tight::NetAddress("0.0.0.0", 0);
 cfg.id    = "my-device";
 cfg.token = "gateway-shared-secret";        // 必须与网关一致
 // cfg.encryption_enabled 默认 true：握手自动完成 ECDH，数据自动加密
 
-creek::TightTransport transport(cfg);
-transport.set_message_callback([](const std::string& peer, creek::Bytes payload) {
+tight::TightTransport transport(cfg);
+transport.set_message_callback([](const std::string& peer, tight::Bytes payload) {
     // 处理网关下行消息
 });
-transport.set_command_callback([](const std::string& peer, creek::Bytes payload) {
+transport.set_command_callback([](const std::string& peer, tight::Bytes payload) {
     // 处理保序命令（控制/按键）
 });
 transport.start();
-transport.connect({"gateway-9443", creek::NetAddress("127.0.0.1", 9443)});
+transport.connect({"gateway-9443", tight::NetAddress("127.0.0.1", 9443)});
 
 std::string hello = R"({"type":"hello","product_id":"p1","product_key":"k1",
                         "product_secret":"s1","device_name":"my-device"})";
-transport.send("gateway-9443", creek::Bytes(hello.begin(), hello.end()));
+transport.send("gateway-9443", tight::Bytes(hello.begin(), hello.end()));
 transport.send_command("gateway-9443", {'c','m','d'});   // 命令通道
 ```
 

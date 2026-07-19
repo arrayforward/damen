@@ -30,26 +30,26 @@ TEST_CASE("e2e_full_flow") {
     ASSERT_TRUE(server.start());
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    creek::TightConfig cc;
-    cc.bind = creek::NetAddress("127.0.0.1", port + 1);
+    tight::TightConfig cc;
+    cc.bind = tight::NetAddress("127.0.0.1", port + 1);
     cc.id = "dev-full";
     cc.token = "shared-secret";
-    cc.role = creek::LinkRole::Leaf;
+    cc.role = tight::LinkRole::Leaf;
     cc.mtu = 1400;
     cc.dead_timeout = std::chrono::seconds(30);
 
-    creek::TightTransport client(cc);
+    tight::TightTransport client(cc);
     client.set_message_callback(
-        [&](const std::string&, creek::Bytes p) {
+        [&](const std::string&, tight::Bytes p) {
             std::lock_guard<std::mutex> lk(recv_mtx);
             recv.emplace_back(p.begin(), p.end());
         });
     ASSERT_TRUE(client.start());
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    creek::RemotePeer rp;
+    tight::RemotePeer rp;
     rp.id = "gateway-22000";
-    rp.address = creek::NetAddress("127.0.0.1", port);
+    rp.address = tight::NetAddress("127.0.0.1", port);
     ASSERT_TRUE(client.connect(rp));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -57,7 +57,7 @@ TEST_CASE("e2e_full_flow") {
     std::string hello = "{\"type\":\"hello\",\"product_id\":\"p\","
         "\"product_key\":\"k\",\"product_secret\":\"s\","
         "\"device_name\":\"dev-full\"}";
-    auto payload = creek::Bytes(hello.begin(), hello.end());
+    auto payload = tight::Bytes(hello.begin(), hello.end());
     ASSERT_TRUE(client.send("gateway-22000", std::move(payload)));
 
     for (int i = 0; i < 20; ++i) {
@@ -79,7 +79,7 @@ TEST_CASE("e2e_full_flow") {
     recv.clear();
 
     std::string ping = "{\"type\":\"ping\",\"device_id\":\"dev-full\"}";
-    client.send("gateway-22000", creek::Bytes(ping.begin(), ping.end()));
+    client.send("gateway-22000", tight::Bytes(ping.begin(), ping.end()));
 
     for (int i = 0; i < 20; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));

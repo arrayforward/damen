@@ -5,7 +5,7 @@
 
 #include "gateway/gateway_context.hpp"
 
-#include "creek/logger.hpp"
+#include "tight/logger.hpp"
 
 #include <utility>
 #include <vector>
@@ -30,7 +30,7 @@ public:
 
 private:
     void on_bye(const GatewayMessage& msg) {
-        CREEK_LOG_INFO("Device bye: " + msg.m_device_id);
+        TIGHT_LOG_INFO("Device bye: " + msg.m_device_id);
         m_ctx->m_session->close_session(msg.m_device_id);
         m_ctx->m_metrics->on_connection_close(msg.m_device_id);
         if (m_ctx->m_downstream) {

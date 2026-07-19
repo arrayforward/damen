@@ -1,13 +1,13 @@
 #include "test_framework.hpp"
 
-#include "tight/crypto.hpp"
+#include "src/crypto.hpp"
 
 #include <array>
 #include <string>
 #include <vector>
 
-using namespace creek;
-using namespace creek::tight_detail;
+using namespace tight;
+using namespace tight::tight_detail;
 
 // 十六进制字符串转字节数组
 static std::vector<std::uint8_t> unhex(const std::string& hex) {

@@ -1,16 +1,16 @@
 #include "test_framework.hpp"
 
-#include "tight/peer.hpp"
-#include "tight/reassembler.hpp"
-#include "tight/fragmenter.hpp"
-#include "tight/report.hpp"
+#include "src/peer.hpp"
+#include "src/reassembler.hpp"
+#include "src/fragmenter.hpp"
+#include "src/report.hpp"
 
-#include "creek/tight.hpp"
+#include "tight/tight.hpp"
 
 #include <chrono>
 
-using namespace creek;
-using namespace creek::tight_detail;
+using namespace tight;
+using namespace tight::tight_detail;
 
 TEST_CASE("fec_parity_count_from_late_ratio_entropy") {
     // H(0) = 0 -> minimum 1 parity.
