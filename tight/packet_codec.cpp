@@ -37,7 +37,9 @@ Bytes PacketCodec::encode(const PacketHeader& header, const Bytes& payload) {
     put32(28, header.message_id);
     put16(32, header.fragment_index);
     put16(34, header.fragment_count);
-    put16(36, static_cast<std::uint16_t>(payload.size()));
+    // 使用 header.payload_size 而非 payload.size()：加密路径下头部先定稿
+    // （密文长度），AAD 重编码时需与线上字节一致
+    put16(36, header.payload_size);
     put16(38, header.reserved);
     put32(40, header.tick);
     put32(44, 0);

@@ -99,3 +99,52 @@ TEST_CASE("e2e_tight_transport_pair") {
     client.stop();
     server.stop();
 }
+
+TEST_CASE("e2e_tight_pair_encryption_disabled") {
+    // 关闭 ECDH+AEAD 后回退明文传输，确认兼容路径仍然可用
+    creek::TightConfig server_cfg;
+    server_cfg.bind = creek::NetAddress("127.0.0.1", 20011);
+    server_cfg.id = "plain-server";
+    server_cfg.token = "shared-secret";
+    server_cfg.role = creek::LinkRole::Node;
+    server_cfg.encryption_enabled = false;
+
+    creek::TightTransport server(server_cfg);
+    std::atomic<int> server_msgs{0};
+    server.set_message_callback(
+        [&](const std::string& pid, creek::Bytes p) {
+            ++server_msgs;
+            server.send(pid, creek::Bytes(p.begin(), p.end()));
+        });
+    ASSERT_TRUE(server.start());
+
+    creek::TightConfig client_cfg;
+    client_cfg.bind = creek::NetAddress("127.0.0.1", 20012);
+    client_cfg.id = "plain-client";
+    client_cfg.token = "shared-secret";
+    client_cfg.role = creek::LinkRole::Leaf;
+    client_cfg.encryption_enabled = false;
+
+    creek::TightTransport client(client_cfg);
+    std::atomic<int> client_msgs{0};
+    std::string client_last;
+    client.set_message_callback(
+        [&](const std::string&, creek::Bytes p) {
+            ++client_msgs;
+            client_last = std::string(p.begin(), p.end());
+        });
+    ASSERT_TRUE(client.start());
+    ASSERT_TRUE(client.connect({"plain-server", creek::NetAddress("127.0.0.1", 20011)}));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::string msg = "plaintext-roundtrip";
+    client.send("plain-server", creek::Bytes(msg.begin(), msg.end()));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    ASSERT_GE(server_msgs.load(), 1);
+    ASSERT_GE(client_msgs.load(), 1);
+    ASSERT_EQ(client_last, "plaintext-roundtrip");
+
+    client.stop();
+    server.stop();
+}

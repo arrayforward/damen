@@ -26,13 +26,46 @@ TEST_CASE("fec_parity_count_from_late_ratio_entropy") {
     ASSERT_EQ(Fragmenter::compute_parity_count_for(0.5, 10), 3);
 }
 
-TEST_CASE("fec_xor_recover_one") {
+TEST_CASE("fec_rs_first_parity_is_xor") {
+    // 第 0 个校验分片系数全 1，等于全体数据分片逐字节 XOR
     std::vector<Bytes> frags = {Bytes{1, 2, 3, 4}, Bytes{5, 6, 7, 8}, Bytes{9, 10, 11, 12}};
-    Bytes p = ReedSolomon::parity(frags, 4);
-    std::vector<Bytes> broken = {Bytes{1, 2, 3, 4}, Bytes(4, 0), Bytes{9, 10, 11, 12}};
-    ASSERT_TRUE(ReedSolomon::recover_one(broken, p, 1, 4));
-    Bytes expected{5, 6, 7, 8};
-    ASSERT_TRUE(broken[1] == expected);
+    auto parities = ReedSolomon::encode(frags, 1, 4);
+    ASSERT_EQ(parities.size(), 1u);
+    Bytes expected{13, 14, 15, 0};  // 1^5^9, 2^6^10, 3^7^11, 4^8^12
+    ASSERT_TRUE(parities[0] == expected);
+}
+
+TEST_CASE("fec_rs_recover_single_erasure") {
+    std::vector<Bytes> frags = {Bytes{1, 2, 3, 4}, Bytes{5, 6, 7, 8}, Bytes{9, 10, 11, 12}};
+    auto parities = ReedSolomon::encode(frags, 2, 4);
+    ASSERT_EQ(parities.size(), 2u);
+    std::vector<std::optional<Bytes>> data = {frags[0], std::nullopt, frags[2]};
+    std::vector<std::pair<std::size_t, Bytes>> ps = {{0, parities[0]}, {1, parities[1]}};
+    ASSERT_TRUE(ReedSolomon::decode(data, ps, 4));
+    ASSERT_TRUE(data[1].has_value());
+    ASSERT_TRUE(*data[1] == frags[1]);
+}
+
+TEST_CASE("fec_rs_recover_multiple_erasures") {
+    // 4 数据分片 + 2 校验，丢 2 个数据分片（XOR 时代无法恢复，RS 可以）
+    std::vector<Bytes> frags = {Bytes{0x10, 0x20, 0x30, 0x40},
+                                Bytes{0x55, 0x66, 0x77, 0x11},
+                                Bytes{0xAA, 0xBB, 0xCC, 0xDD},
+                                Bytes{0x01, 0x02, 0x03, 0x04}};
+    auto parities = ReedSolomon::encode(frags, 2, 4);
+    std::vector<std::optional<Bytes>> data = {std::nullopt, frags[1], std::nullopt, frags[3]};
+    std::vector<std::pair<std::size_t, Bytes>> ps = {{0, parities[0]}, {1, parities[1]}};
+    ASSERT_TRUE(ReedSolomon::decode(data, ps, 4));
+    ASSERT_TRUE(*data[0] == frags[0]);
+    ASSERT_TRUE(*data[2] == frags[2]);
+}
+
+TEST_CASE("fec_rs_too_many_erasures_fails") {
+    std::vector<Bytes> frags = {Bytes{1, 2, 3, 4}, Bytes{5, 6, 7, 8}, Bytes{9, 10, 11, 12}};
+    auto parities = ReedSolomon::encode(frags, 1, 4);
+    std::vector<std::optional<Bytes>> data = {std::nullopt, std::nullopt, frags[2]};
+    std::vector<std::pair<std::size_t, Bytes>> ps = {{0, parities[0]}};
+    ASSERT_FALSE(ReedSolomon::decode(data, ps, 4));
 }
 
 TEST_CASE("bandwidth_probe_on_stable_rtt") {

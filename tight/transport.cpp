@@ -5,6 +5,7 @@
 
 #include "address.hpp"
 #include "command.hpp"
+#include "crypto.hpp"
 #include "fragmenter.hpp"
 #include "peer.hpp"
 #include "reassembler.hpp"
@@ -86,6 +87,9 @@ public:
 
     BandwidthEstimator m_bandwidth;
 
+    // 本地 X25519 密钥对（ECDH），握手时交换公钥协商会话密钥
+    X25519KeyPair m_local_keypair{};
+
     std::mt19937_64 m_rng;
     std::mutex m_rng_mutex;
 
@@ -96,6 +100,9 @@ public:
         m_local_session_id = random_u64();
         if (m_local_client_id == 0) m_local_client_id = 1;
         m_token_bucket_time = std::chrono::steady_clock::now();
+        if (m_config.encryption_enabled) {
+            m_local_keypair = x25519_generate();
+        }
     }
 
     std::uint64_t random_u64() {
@@ -317,7 +324,7 @@ public:
         }
         header.payload_size = static_cast<std::uint16_t>(payload.size());
         header.tick = static_cast<std::uint32_t>(unix_millis() & 0xFFFFFFFFULL);
-        Bytes datagram = PacketCodec::encode(header, payload);
+        Bytes datagram = build_wire_packet(&peer, header, payload);
         // 插队: straight to the outbound queue, skipping the send queue, the
         // reactor tick and the encode thread.
         send_raw(&peer, datagram);
@@ -392,7 +399,8 @@ public:
         return &peer;
     }
 
-    void handle_packet(const sockaddr_in& from, const PacketHeader& header, const Bytes& payload) {
+    // header/payload 按值传递：解密路径需要就地还原明文
+    void handle_packet(const sockaddr_in& from, PacketHeader header, Bytes payload) {
         // NOTE: no per-packet logging here. This fires for every datagram
         // (data/parity/ack/heartbeat) on the single receiver thread; a log
         // write + fflush per datagram slows the recvfrom loop enough to
@@ -405,6 +413,13 @@ public:
         }
         if (peer->m_peer_session_id == 0 && header.session_id != 0) {
             peer->m_peer_session_id = header.session_id;
+        }
+
+        // AES-256-GCM：先解密负载再按类型分发（报文头始终为明文）
+        if (header.flags & kFlagEncrypted) {
+            if (!decrypt_payload(peer, header, payload)) {
+                return;  // 未协商密钥或认证失败：丢弃
+            }
         }
 
         bool need_ack = false;
@@ -437,19 +452,34 @@ public:
         std::uint8_t role_byte = payload[0];
         std::uint16_t id_size = static_cast<std::uint16_t>(payload[1]) << 8U;
         id_size |= static_cast<std::uint16_t>(payload[2]);
-        if (id_size == 0 || payload.size() < 3U + id_size) return;
+        if (payload.size() < 3U + id_size) return;
         std::string peer_id(reinterpret_cast<const char*>(payload.data() + 3), id_size);
+        // 负载尾部 32 字节（启用加密且存在时）为对端 X25519 公钥
+        std::size_t token_end = payload.size();
+        std::array<std::uint8_t, 32> peer_pub{};
+        bool have_pub = false;
+        if (m_config.encryption_enabled && payload.size() >= 3U + id_size + 32) {
+            token_end -= 32;
+            std::memcpy(peer_pub.data(), payload.data() + token_end, 32);
+            have_pub = true;
+        }
         std::string token(reinterpret_cast<const char*>(payload.data() + 3 + id_size),
-                          payload.size() - 3U - id_size);
+                          token_end - 3U - id_size);
         if (token != m_config.token) return;
         // Clock sync (对表) at handshake time; the command channel also
         // restarts on a fresh session.
         sync_clock(peer, header.tick, unix_millis());
         CommandChannel::reset(*peer);
-        peer->m_id = std::move(peer_id);
+        // 空 id 保留接入时分配的匿名身份（anon-*），保证 token 校验与
+        // ECDH 公钥处理照常进行（否则两端加密状态不对称，密文被单向丢弃）
+        if (id_size > 0) {
+            peer->m_id = std::move(peer_id);
+        }
         peer->m_role = role_byte == static_cast<std::uint8_t>(LinkRole::Node)
                          ? LinkRole::Node
                          : LinkRole::Leaf;
+        // ECDH：用对端公钥派生 AES-256-GCM 会话密钥
+        if (have_pub) derive_session_key(peer, peer_pub, header.client_id);
         if (!peer->m_reconnect && peer->m_addr_set) {
             send_handshake(peer);
         }
@@ -654,8 +684,7 @@ public:
         feed_rtt_from_tick(peer, header.tick);
         std::uint64_t probe_bw = Report::handle(*peer, payload,
                        [this](Peer* p, const PacketHeader& h, const Bytes& pl) {
-                           Bytes datagram = PacketCodec::encode(h, pl);
-                           send_raw(p, datagram);
+                           send_raw(p, build_wire_packet(p, h, pl));
                        });
         // Late ratio reported by the peer drives the (secondary) gain signal.
         m_bandwidth.on_late_ratio(peer->m_peer_late_ratio);
@@ -708,8 +737,102 @@ public:
         payload.push_back(static_cast<std::uint8_t>(id_size & 0xFFU));
         payload.insert(payload.end(), m_config.id.begin(), m_config.id.begin() + id_size);
         payload.insert(payload.end(), m_config.token.begin(), m_config.token.end());
+        // 追加本地 X25519 公钥，供对端 ECDH 协商会话密钥
+        if (m_config.encryption_enabled) {
+            payload.insert(payload.end(), m_local_keypair.public_key.begin(),
+                           m_local_keypair.public_key.end());
+        }
         peer->m_last_handshake_sent = std::chrono::steady_clock::now();
         send_control(peer, PacketType::Handshake, payload, true);
+    }
+
+    // ECDH 协商并 HKDF 派生会话密钥：双方 client_id 排序拼接作为 salt，
+    // 两端因此导出相同的 AES-256-GCM 密钥。
+    void derive_session_key(Peer* peer, const std::array<std::uint8_t, 32>& peer_pub,
+                            std::uint32_t peer_client_id) {
+        std::array<std::uint8_t, 32> shared{};
+        if (!x25519(shared, m_local_keypair.private_key, peer_pub)) {
+            CREEK_LOG_WARN("[tight] ECDH 低阶点，该对端不启用加密");
+            return;
+        }
+        std::uint32_t lo = std::min(m_local_client_id, peer_client_id);
+        std::uint32_t hi = std::max(m_local_client_id, peer_client_id);
+        std::array<std::uint8_t, 8> salt{};
+        for (int i = 0; i < 4; ++i) {
+            salt[i] = static_cast<std::uint8_t>((lo >> (i * 8)) & 0xFF);
+            salt[4 + i] = static_cast<std::uint8_t>((hi >> (i * 8)) & 0xFF);
+        }
+        peer->m_crypto_key = hkdf_sha256(shared.data(), shared.size(),
+                                         salt.data(), salt.size(), "tight-data-key-v1");
+        peer->m_crypto_ready = true;
+    }
+
+    // GCM 96 位 nonce（每发送方向唯一）：
+    //   Data/Parity: client_id(4) | message_id(4) | fragment_index(2) | type(1) | 0(1)
+    //   Command:     client_id(4) | sequence(4)   | type(1) | 0(3)
+    // 字段按大端写入，保证不同字节序的主机间一致。
+    std::array<std::uint8_t, kGcmNonceSize> build_nonce(const PacketHeader& header) {
+        std::array<std::uint8_t, kGcmNonceSize> n{};
+        auto put32 = [&](std::size_t off, std::uint32_t v) {
+            std::uint32_t be = to_be32(v);
+            std::memcpy(n.data() + off, &be, 4);
+        };
+        put32(0, header.client_id);
+        if (header.type == PacketType::Command) {
+            put32(4, header.sequence);
+            n[8] = static_cast<std::uint8_t>(header.type);
+        } else {
+            put32(4, header.message_id);
+            std::uint16_t be_idx = to_be16(header.fragment_index);
+            std::memcpy(n.data() + 8, &be_idx, 2);
+            n[10] = static_cast<std::uint8_t>(header.type);
+        }
+        return n;
+    }
+
+    // AES-256-GCM 加密负载：输出 密文 || 16B 认证标签。
+    // AAD 为定稿报文头的前 44 字节（含加密标志位与密文长度），
+    // 将密文与报文头绑定，防止头部被篡改。
+    Bytes encrypt_payload(Peer* peer, PacketHeader& header, const Bytes& payload) {
+        if (!m_config.encryption_enabled || !peer->m_crypto_ready) return payload;
+        header.flags |= kFlagEncrypted;
+        header.payload_size = static_cast<std::uint16_t>(payload.size() + kGcmTagSize);
+        auto nonce = build_nonce(header);
+        Bytes aad = PacketCodec::encode(header, Bytes{});
+        aad.resize(kHeaderSize - 4);   // 前 44 字节（不含 CRC 字段）
+        Bytes ct(payload.size());
+        std::array<std::uint8_t, kGcmTagSize> tag{};
+        aes256_gcm_encrypt(peer->m_crypto_key, nonce, aad.data(), aad.size(),
+                           payload.data(), payload.size(), ct.data(), tag.data());
+        ct.insert(ct.end(), tag.begin(), tag.end());
+        return ct;
+    }
+
+    // 解密负载并校验认证标签；失败返回 false（调用方丢弃报文）
+    bool decrypt_payload(Peer* peer, PacketHeader& header, Bytes& payload) {
+        if (!peer->m_crypto_ready) return false;
+        if (payload.size() < kGcmTagSize) return false;
+        std::size_t ct_len = payload.size() - kGcmTagSize;
+        auto nonce = build_nonce(header);
+        Bytes aad = PacketCodec::encode(header, Bytes{});
+        aad.resize(kHeaderSize - 4);
+        Bytes pt(ct_len);
+        if (!aes256_gcm_decrypt(peer->m_crypto_key, nonce, aad.data(), aad.size(),
+                                payload.data(), ct_len, payload.data() + ct_len,
+                                pt.data())) {
+            return false;
+        }
+        payload = std::move(pt);
+        header.payload_size = static_cast<std::uint16_t>(ct_len);
+        header.flags &= ~kFlagEncrypted;   // 恢复 flags 低位语义（数据分片数）
+        return true;
+    }
+
+    // 由明文负载构建线上报文：按需加密后编码
+    Bytes build_wire_packet(Peer* peer, const PacketHeader& header, const Bytes& payload) {
+        PacketHeader wire_header = header;
+        Bytes wire = encrypt_payload(peer, wire_header, payload);
+        return PacketCodec::encode(wire_header, wire);
     }
 
     void send_data_packet(Peer* peer, std::uint32_t msg_id, std::uint16_t idx,
@@ -747,7 +870,7 @@ public:
                 ps.m_bytes = 0;  // filled in after encode to avoid re-encoding
             }
         }
-        Bytes datagram = PacketCodec::encode(header, payload);
+        Bytes datagram = build_wire_packet(peer, header, payload);
         send_raw(peer, datagram);
         if (is_acked_data) {
             std::lock_guard<std::mutex> lock(peer->m_mu);

@@ -28,6 +28,7 @@ add_library(creek STATIC
     tight/fragmenter.cpp
     tight/report.cpp
     tight/command.cpp
+    tight/crypto.cpp
     tight/packet_codec.cpp
     tight/fec.cpp
     tight/bandwidth.cpp
@@ -209,5 +210,16 @@ target_link_libraries(test_command PRIVATE
     ${EXTRA_LIBS}
 )
 add_test(NAME test_command COMMAND test_command)
+
+add_executable(test_crypto
+    tests/test_crypto.cpp
+)
+target_link_libraries(test_crypto PRIVATE
+    creek
+    gateway_core
+    Threads::Threads
+    ${EXTRA_LIBS}
+)
+add_test(NAME test_crypto COMMAND test_crypto)
 
 install(TARGETS cloud_gateway RUNTIME DESTINATION bin)

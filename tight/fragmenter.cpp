@@ -63,17 +63,9 @@ void Fragmenter::fragment_and_send(Peer& peer, Bytes payload, std::size_t mtu,
         frag_lens[i] = static_cast<std::uint16_t>(len);
         if (frags[i].size() < width) frags[i].resize(width, 0);
     }
-    Bytes parity = ReedSolomon::parity(frags, width);
     std::uint16_t parity_count = compute_parity_count_for(late_ratio, data_count);
-    std::vector<Bytes> parities;
-    parities.push_back(parity);
-    for (std::uint16_t p = 1; p < parity_count; ++p) {
-        std::vector<Bytes> rotated(frags.size());
-        for (std::size_t i = 0; i < frags.size(); ++i) {
-            rotated[i] = frags[(i + p) % frags.size()];
-        }
-        parities.push_back(ReedSolomon::parity(rotated, width));
-    }
+    // Reed-Solomon 编码：p 个校验分片可恢复任意 p 个丢失分片
+    std::vector<Bytes> parities = ReedSolomon::encode(frags, parity_count, width);
     std::uint16_t cnt = static_cast<std::uint16_t>(data_count + parity_count);
     std::uint16_t d_cnt = static_cast<std::uint16_t>(data_count);
     for (std::size_t i = 0; i < data_count; ++i) {

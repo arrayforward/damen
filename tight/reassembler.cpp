@@ -140,52 +140,42 @@ bool Reassembler::try_assemble(Peer& peer, IncomingMessage& in,
         deliver(&peer, build_msg(parts, real_sizes));
         return true;
     }
-    std::size_t missing = SIZE_MAX;
+    // 统计缺失的数据分片数
     std::size_t multi = 0;
     for (std::size_t i = 0; i < data_count; ++i) {
-        if (!in.m_fragments[i].has_value()) { ++multi; missing = i; }
+        if (!in.m_fragments[i].has_value()) ++multi;
     }
-    if (multi > parity_count) return false;
+    if (multi > parity_count) return false;   // 缺失超过校验能力
     if (multi == 0) return false;
     std::size_t width = 0;
     for (auto& f : in.m_fragments) {
         if (f.has_value()) width = std::max(width, f->size());
     }
     if (width == 0) return false;
-    std::vector<Bytes> frags(data_count);
+
+    // Reed-Solomon 解码：任意 multi 个缺失分片用任意 multi 个校验分片恢复
+    std::vector<std::optional<Bytes>> data_frags(data_count);
+    for (std::size_t i = 0; i < data_count; ++i) data_frags[i] = in.m_fragments[i];
+    std::vector<std::pair<std::size_t, Bytes>> parities;
+    for (std::size_t p = 0; p < parity_count; ++p) {
+        if (data_count + p < in.m_fragments.size() &&
+            in.m_fragments[data_count + p].has_value()) {
+            parities.emplace_back(p, *in.m_fragments[data_count + p]);
+        }
+    }
+    if (multi > parities.size()) return false;
+    if (!ReedSolomon::decode(data_frags, parities, width)) return false;
+
+    // 回填恢复出的分片；真实长度由报文内 4 字节总长前缀在 build_msg 裁剪
     for (std::size_t i = 0; i < data_count; ++i) {
-        frags[i] = in.m_fragments[i].has_value() ? *in.m_fragments[i] : Bytes(width, 0);
-    }
-    std::vector<std::size_t> missing_indices;
-    for (std::size_t i = 0; i < data_count; ++i) {
-        if (!in.m_fragments[i].has_value()) missing_indices.push_back(i);
-    }
-    for (std::size_t p = 0; p < parity_count && !missing_indices.empty(); ++p) {
-        if (data_count + p >= in.m_fragments.size()) continue;
-        if (!in.m_fragments[data_count + p].has_value()) continue;
-        Bytes parity_data = *in.m_fragments[data_count + p];
-        std::vector<Bytes> rotated(data_count);
-        for (std::size_t i = 0; i < data_count; ++i) {
-            rotated[i] = frags[(i + p) % data_count];
-        }
-        std::vector<std::size_t> rotated_missing;
-        for (auto idx : missing_indices) {
-            rotated_missing.push_back((idx + data_count - p) % data_count);
-        }
-        if (rotated_missing.size() == 1) {
-            if (ReedSolomon::recover_one(rotated, parity_data, rotated_missing[0], width)) {
-                frags[(rotated_missing[0] + p) % data_count] = rotated[rotated_missing[0]];
-                in.m_fragments[(rotated_missing[0] + p) % data_count] = rotated[rotated_missing[0]];
-                in.m_sizes[(rotated_missing[0] + p) % data_count] = in.m_sizes[data_count + p];
-                missing_indices.clear();
-                break;
-            }
+        if (!in.m_fragments[i].has_value() && data_frags[i].has_value()) {
+            in.m_fragments[i] = *data_frags[i];
+            in.m_sizes[i] = static_cast<std::uint16_t>(width);
         }
     }
-    if (!missing_indices.empty()) return false;
     std::vector<Bytes> recovered_parts(data_count);
     for (std::size_t i = 0; i < data_count; ++i) {
-        recovered_parts[i] = frags[i];
+        recovered_parts[i] = *in.m_fragments[i];
     }
     deliver(&peer, build_msg(recovered_parts, in.m_sizes));
     return true;

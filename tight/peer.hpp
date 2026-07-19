@@ -7,6 +7,7 @@
 
 #include "creek/types.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -94,6 +95,11 @@ struct Peer {
     bool m_cmd_initialized{false};
     std::map<std::uint32_t, Bytes> m_cmd_held;
     std::chrono::steady_clock::time_point m_cmd_gap_since;
+
+    // 加密状态：握手阶段 ECDH 协商出的会话密钥（AES-256-GCM），
+    // 双方 client_id 排序拼接为 salt 经 HKDF-SHA256 派生。
+    bool m_crypto_ready{false};
+    std::array<std::uint8_t, 32> m_crypto_key{};
 };
 
 // A probe train is considered finished once no Probe packet has arrived for

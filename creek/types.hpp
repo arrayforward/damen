@@ -95,6 +95,9 @@ struct TightConfig {
     // packet arrival times and reports it back. Disable to skip probing.
     bool             speed_test_enabled{true};
     std::size_t      speed_test_bytes{100 * 1024};
+    // ECDH + AEAD：握手阶段交换 X25519 公钥并 HKDF 派生会话密钥，
+    // 数据分组（Data/Parity/Command）使用 AES-256-GCM 加密
+    bool             encryption_enabled{true};
 };
 
 inline std::uint64_t unix_millis() {
