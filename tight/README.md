@@ -29,6 +29,10 @@ tight/
 └── src/                    # 私有实现（不对外暴露，namespace tight::tight_detail）
 ```
 
+## 文档
+
+完整使用文档（含客户端/服务器端示例、配置参考、行为约定）：[docs/usage.md](docs/usage.md)
+
 ## 使用
 
 ### 方式一：add_subdirectory（推荐）
