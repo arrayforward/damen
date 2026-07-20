@@ -109,6 +109,10 @@ struct Peer {
     // 异常消息丢弃日志：由配置 TightConfig::drop_log 决定（默认开），
     // lite_mode 端点自动关闭（静默丢弃）；建 peer 时写入。
     bool m_drop_log{true};
+    // 重传协商：m_retransmit 为本端配置（决定是否生成 NACK）；
+    // m_peer_retransmit 为对端握手通告（决定是否保留重传缓冲）。
+    bool m_retransmit{true};
+    bool m_peer_retransmit{true};
     // 限流时间戳（每 peer 每秒最多一条，防日志洪水）
     std::chrono::steady_clock::time_point m_oversize_log_ts{};
 };

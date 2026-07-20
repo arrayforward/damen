@@ -389,6 +389,7 @@ public:
         peer.m_role = LinkRole::Node;
         peer.m_reconnect = true;
         peer.m_drop_log = m_config.drop_log && !m_lite_mode.load();
+        peer.m_retransmit = m_config.retransmit_enabled;
         m_peer_by_addr[key] = remote.id;
         if (peer.m_state == LinkState::Closed) {
             peer.m_state = LinkState::Handshake;
@@ -568,6 +569,7 @@ public:
         peer.m_addr_set = true;
         peer.m_role = LinkRole::Leaf;
         peer.m_drop_log = m_config.drop_log && !m_lite_mode.load();
+        peer.m_retransmit = m_config.retransmit_enabled;
         peer.m_state = LinkState::Handshake;
         peer.m_last_handshake_sent = std::chrono::steady_clock::now() - std::chrono::hours(1);
         m_peer_by_addr[key] = id;
@@ -629,11 +631,17 @@ public:
         id_size |= static_cast<std::uint16_t>(payload[2]);
         if (payload.size() < 3U + id_size) return;
         std::string peer_id(reinterpret_cast<const char*>(payload.data() + 3), id_size);
-        // 负载尾部 32 字节（启用加密且存在时）为对端 X25519 公钥
+        // 负载尾部布局：[token][pubkey 32B?][flags 1B]
+        // flags bit0 = 对端 retransmit_enabled 通告（认证时下发/上报，
+        // 任一端可单方面关闭本链路的重传缓冲）。
         std::size_t token_end = payload.size();
+        if (token_end > 3U + id_size) {
+            peer->m_peer_retransmit = (payload[token_end - 1] & 0x01U) != 0;
+            token_end -= 1;
+        }
         std::array<std::uint8_t, 32> peer_pub{};
         bool have_pub = false;
-        if (m_config.encryption_enabled && payload.size() >= 3U + id_size + 32) {
+        if (m_config.encryption_enabled && token_end >= 3U + id_size + 32) {
             token_end -= 32;
             std::memcpy(peer_pub.data(), payload.data() + token_end, 32);
             have_pub = true;
@@ -917,6 +925,9 @@ public:
             payload.insert(payload.end(), m_local_keypair.public_key.begin(),
                            m_local_keypair.public_key.end());
         }
+        // 尾部 1 字节能力标志：bit0 = retransmit_enabled 通告。
+        // 对端据此决定是否为本链路保留重传缓冲（任一端可单方面关闭）。
+        payload.push_back(m_config.retransmit_enabled ? 0x01 : 0x00);
         peer->m_last_handshake_sent = std::chrono::steady_clock::now();
         send_control(peer, PacketType::Handshake, payload, true);
     }
@@ -1033,6 +1044,10 @@ public:
         header.client_id = m_local_client_id;
         header.session_id = m_local_session_id;
         bool is_acked_data = ackable && is_data;
+        // 重传缓冲：本端配置 && 对端握手通告均开启才保留
+        // （任一端单方面关闭即不再为本链路缓冲，纯 FEC 兜底）
+        bool keep_pending = is_acked_data && m_config.retransmit_enabled &&
+                            peer->m_peer_retransmit;
         // Brief lock: only for sequence assignment and pending insertion.
         // send_raw is called WITHOUT any lock, so the reactor thread can run
         // even when this thread is blocked on token-bucket back-pressure.
@@ -1047,7 +1062,7 @@ public:
             header.reserved = real_size;
             header.payload_size = static_cast<std::uint16_t>(payload.size());
             header.tick = static_cast<std::uint32_t>(unix_millis() & 0xFFFFFFFFULL);
-            if (is_acked_data) {
+            if (keep_pending) {
                 auto& ps = peer->m_pending[header.sequence];
                 ps.m_header = header;
                 ps.m_payload = payload;
@@ -1058,7 +1073,7 @@ public:
         auto datagram = build_wire_packet(peer, header, payload);
         std::size_t wire_size = datagram.size();
         send_raw(peer, std::move(datagram));
-        if (is_acked_data) {
+        if (keep_pending) {
             std::lock_guard<std::mutex> lock(peer->m_mu);
             peer->m_pending[header.sequence].m_bytes = wire_size;
         }

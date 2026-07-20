@@ -51,7 +51,7 @@ static int run_server() {
     return 0;
 }
 
-static int run_client() {
+static int run_client(bool no_retransmit) {
     TightConfig cc;
     cc.bind = NetAddress("127.0.0.1", 21071);
     cc.id = "cli";
@@ -60,6 +60,7 @@ static int run_client() {
     cc.speed_test_enabled = false;
     cc.encryption_enabled = false;
     cc.lite_mode = true;
+    cc.retransmit_enabled = !no_retransmit;
     TightTransport client(cc);
     if (!client.start()) return 1;
     if (!client.connect({"srv", NetAddress("127.0.0.1", 21070)})) return 1;
@@ -91,9 +92,10 @@ static int run_client() {
     }
     std::this_thread::sleep_for(std::chrono::seconds(2));
     peak = std::max(peak, working_set_kb());
-    std::printf("[client] after %dx8KB @50KB/s peak WS: %zu KB (delta %zd KB)\n",
+    std::printf("[client] after %dx8KB @50KB/s peak WS: %zu KB (delta %zd KB)%s\n",
                 sent, peak,
-                static_cast<std::ptrdiff_t>(peak) - static_cast<std::ptrdiff_t>(base));
+                static_cast<std::ptrdiff_t>(peak) - static_cast<std::ptrdiff_t>(base),
+                no_retransmit ? " [retransmit OFF]" : "");
 
     client.stop();
     std::printf("[client] after stop WS: %zu KB\n", working_set_kb());
@@ -101,8 +103,9 @@ static int run_client() {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) { std::printf("usage: test_mem8k_split server|client\n"); return 2; }
+    if (argc < 2) { std::printf("usage: test_mem8k_split server|client [--no-retransmit]\n"); return 2; }
+    bool no_retransmit = argc > 2 && std::strcmp(argv[2], "--no-retransmit") == 0;
     if (std::strcmp(argv[1], "server") == 0) return run_server();
-    if (std::strcmp(argv[1], "client") == 0) return run_client();
+    if (std::strcmp(argv[1], "client") == 0) return run_client(no_retransmit);
     return 2;
 }

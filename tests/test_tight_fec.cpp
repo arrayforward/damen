@@ -4,10 +4,12 @@
 #include "src/reassembler.hpp"
 #include "src/fragmenter.hpp"
 #include "src/report.hpp"
+#include "src/wire_format.hpp"
 
 #include "tight/tight.hpp"
 
 #include <chrono>
+#include <cstring>
 
 using namespace tight;
 using namespace tight::tight_detail;
@@ -182,6 +184,34 @@ TEST_CASE("report_round_trip_late_ratio_and_probe_bw") {
     ASSERT_EQ(bw, 12345678ULL);
     ASSERT_TRUE(sender_side.m_peer_late_ratio > 0.09 &&
                 sender_side.m_peer_late_ratio < 0.11);
+}
+
+TEST_CASE("report_retransmit_off_no_nack_and_skip_gaps") {
+    // 重传关闭（本端配置或对端通告）：不生成 NACK（lost_count=0），
+    // 缺口立即跳过（ack 游标推进），missing 表清空。
+    for (bool via_peer_flag : {false, true}) {
+        Peer rx;
+        rx.m_seq_initialized = true;
+        rx.m_next_expected_seq = 3;          // 缺口 3、4，已收到 5
+        rx.m_recv_seqs.insert(5);
+        rx.m_missing_seqs.emplace(3, std::chrono::steady_clock::now());
+        rx.m_missing_seqs.emplace(4, std::chrono::steady_clock::now());
+        if (via_peer_flag) {
+            rx.m_peer_retransmit = false;    // 对端握手通告关闭
+        } else {
+            rx.m_retransmit = false;         // 本端配置关闭
+        }
+
+        Bytes payload = Report::build_payload(rx, std::chrono::milliseconds(1000));
+        ASSERT_TRUE(rx.m_missing_seqs.empty());
+        ASSERT_EQ(rx.m_next_expected_seq, 6u);   // 跳过 3、4 并消化已收的 5
+
+        // lost_count 字段（offset 6，2 字节 BE）必须为 0
+        ASSERT_TRUE(payload.size() >= 12);
+        std::uint16_t lost_be = 0;
+        std::memcpy(&lost_be, payload.data() + 6, 2);
+        ASSERT_EQ(to_be16(lost_be), 0u);
+    }
 }
 
 TEST_CASE("probe_train_finalize") {

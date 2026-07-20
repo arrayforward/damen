@@ -30,8 +30,26 @@ Bytes Report::build_payload(Peer& peer, std::chrono::milliseconds report_interva
         const auto give_up_us = std::chrono::duration_cast<std::chrono::microseconds>(
             report_interval * (kMaxRetries + 2)).count();
 
+        // 跳过缺口的公共动作：推进游标并消化已收的连续序号
+        auto skip_gap = [&peer](std::uint32_t g) {
+            if (peer.m_seq_initialized && g == peer.m_next_expected_seq) {
+                ++peer.m_next_expected_seq;
+                while (peer.m_recv_seqs.count(peer.m_next_expected_seq)) {
+                    peer.m_recv_seqs.erase(peer.m_next_expected_seq);
+                    ++peer.m_next_expected_seq;
+                }
+            }
+        };
+
         for (auto mit = peer.m_missing_seqs.begin(); mit != peer.m_missing_seqs.end();) {
             auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(now - mit->second).count();
+            // 重传关闭（本端配置或对端通告）：不生成 NACK，缺口立即跳过，
+            // ack 游标照常前进，纯 FEC 兜底。
+            if (!peer.m_retransmit || !peer.m_peer_retransmit) {
+                skip_gap(mit->first);
+                mit = peer.m_missing_seqs.erase(mit);
+                continue;
+            }
             if (elapsed_us > give_up_us) {
                 // 对端长期未重传（Report 全丢或对端已放弃）：停止上报。
                 // 缺口已在越限时跳过，ack 游标不受影响。
@@ -44,13 +62,7 @@ Bytes Report::build_payload(Peer& peer, std::chrono::milliseconds report_interva
                 lost_seqs.push_back(mit->first);
                 // 超过 3.5×RTT 即跳过缺口：ack 游标不停滞，发送端可正常
                 // 修剪已确认 pending；迟到的重传仍会被正常投递。
-                if (peer.m_seq_initialized && mit->first == peer.m_next_expected_seq) {
-                    ++peer.m_next_expected_seq;
-                    while (peer.m_recv_seqs.count(peer.m_next_expected_seq)) {
-                        peer.m_recv_seqs.erase(peer.m_next_expected_seq);
-                        ++peer.m_next_expected_seq;
-                    }
-                }
+                skip_gap(mit->first);
             }
             ++mit;
         }

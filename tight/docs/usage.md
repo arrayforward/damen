@@ -336,6 +336,7 @@ int main() {
 | `queue_limit` | size_t | 65536 | 发送队列消息数上限（**lite ≤128**） |
 | `max_message_bytes` | size_t | 64KB | 单消息上限，钳制 [8KB, 10MB]；超限 `send` 返回 false，接收侧丢弃畸形分片组 |
 | `drop_log` | bool | true | 丢弃异常消息时告警（**lite 强制关闭**） |
+| `retransmit_enabled` | bool | true | 数据面 NACK 重传。关闭：不生成 NACK、缺口立即跳过，并经握手通告对端停止保留重传缓冲；任一端可单方面关闭，纯 FEC 兜底 |
 | `late_rtt_multiplier` | double | 4.0 | 慢报文判定阈值（倍 RTT）；调低 → FEC 响应更灵敏 |
 | `speed_test_enabled` | bool | true | 建连后发探测列车测带宽 |
 | `speed_test_bytes` | size_t | 100KB | 探测列车长度 |
@@ -400,6 +401,13 @@ public:
    握手/加密/测速等协议行为两端一致。
 6. **内存**：空闲 lite 实例 ~76KB；传输期驻留 ≈ 在途字节数，与总流量
    无关（平台期，已验证 16MB 传输 delta ~136KB）。
+7. **重传协商（握手能力标志）**：握手载荷尾部 1 字节 bit0 通告
+   `retransmit_enabled`。发送端保留重传缓冲的条件 = 本端配置 && 对端
+   通告，因此**任一端可单方面关闭整条链路的重传**（云端可按设备类型
+   下发，端侧也可上报）。关闭后控制包（握手/命令）可靠性不受影响，
+   数据面靠 FEC + 应用层容错。内存收益：在途增量从 ∝码率×确认窗口
+   （50KB/s 实测 128KB，2Mbps 视频预估 ~500KB）降为**常数 ~24KB**；
+   无重传协议栈预算可按 **76KB 静态 + ~50KB 动态** 封顶。
 
 ## 9. 典型场景参数配方
 
@@ -413,6 +421,7 @@ cfg.report_interval      = 500ms;
 cfg.late_rtt_multiplier  = 2.5;
 cfg.speed_test_enabled   = true;                 // 有视频/文件时需要
 cfg.initial_bandwidth_bytes = 4 * 1024 * 1024;
+cfg.retransmit_enabled   = false;                // 纯实时 AV：在途内存常数化
 // 组包：40ms/帧；优先级 音频2 视频1 文件0；文件块 8KB + 应用层确认
 ```
 
@@ -434,4 +443,5 @@ cfg.speed_test_enabled   = false;
 cfg.max_message_bytes    = 8 * 1024;             // 下限
 cfg.report_interval      = 2000ms;
 cfg.heartbeat            = 10000ms;
+cfg.retransmit_enabled   = false;                // 遥测丢一包无所谓，内存封顶
 ```

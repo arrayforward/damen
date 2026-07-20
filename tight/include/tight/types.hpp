@@ -98,6 +98,13 @@ struct TightConfig {
     // 丢弃异常消息（超限/畸形分片）时输出告警日志。仅服务器端开启；
     // lite_mode 端点自动关闭（静默丢弃），不受此开关影响。
     bool           drop_log{true};
+    // 数据面 NACK 重传开关。关闭后：本端不生成 NACK、缺口立即跳过；
+    // 并经握手能力标志通告对端——对端收到后不再为本链路保留重传缓冲
+    // （m_pending≈0，在途内存显著下降），纯 FEC 兜底。任一端可单方面
+    // 关闭，不影响业务：控制包（握手/命令）可靠性独立，数据面实时流
+    // 由 FEC + 应用层容错覆盖。适用：lite IoT 实时音视频/遥测；
+    // 文件/关键数据勿关。
+    bool           retransmit_enabled{true};
     // A data packet is "late" when its transit time (one-way, computed with
     // the per-peer clock offset) exceeds late_rtt_multiplier * RTT.
     double           late_rtt_multiplier{4.0};
