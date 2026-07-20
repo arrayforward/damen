@@ -40,7 +40,14 @@ void Reassembler::handle_data(Peer& peer, const PacketHeader& header,
             }
         }
 
-        if (!peer.m_seq_initialized) {
+        // seq == 0 为未编号报文（Parity 等）：不参与缺口跟踪，也不允许
+        // 初始化序列基准。否则 Parity 先到会以 next_expected=1 初始化，
+        // 而 seq 1/2 是握手等控制包、永远不会以 Data 到达，导致基准卡死：
+        // 缺口被误报为丢包并引发控制包重传循环、ack_seq 冻结、m_pending
+        // 与 m_recv_seqs 无限增长（内存泄漏）。
+        if (seq == 0) {
+            // 跳过节流统计之外的序列跟踪，但仍走下方的分片重组流程
+        } else if (!peer.m_seq_initialized) {
             peer.m_next_expected_seq = seq + 1;
             peer.m_seq_initialized = true;
         } else if (seq >= peer.m_next_expected_seq) {

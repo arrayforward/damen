@@ -35,8 +35,9 @@ void Fragmenter::fragment_and_send(Peer& peer, Bytes payload, std::size_t mtu,
     double late_ratio;
     {
         std::lock_guard<std::mutex> lock(peer.m_mu);
+        // message_id 使用独立计数器，不消耗数据序列号 m_sequence_out
         do {
-            msg_id = static_cast<std::uint32_t>((peer.m_sequence_out++) & 0x7FFFFFFFu);
+            msg_id = static_cast<std::uint32_t>((peer.m_msg_id_out++) & 0x7FFFFFFFu);
         } while (msg_id == 0);
         // FEC redundancy tracks the peer-reported late-packet ratio (each XOR
         // parity fragment recovers exactly one late/lost fragment).

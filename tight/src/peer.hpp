@@ -50,6 +50,11 @@ struct Peer {
     std::chrono::steady_clock::time_point m_last_handshake_sent;
     std::chrono::steady_clock::time_point m_last_report_sent;
     std::uint32_t m_sequence_out{1};
+    // 消息组分 id（fragment 组的 message_id）独立计数器。
+    // 必须与数据序列号 m_sequence_out 分离：若共用，每条消息会消耗两个
+    // 序号，使对端缺口跟踪出现永不到达的"幽灵序号"，全部误报为丢包，
+    // 导致 ack 游标冻结、m_pending 无限堆积（内存泄漏）。
+    std::uint32_t m_msg_id_out{1};
     std::map<std::uint32_t, PendingSend> m_pending;
     std::map<std::uint32_t, IncomingMessage> m_incoming;
     std::map<std::uint32_t, std::chrono::steady_clock::time_point> m_completed;
