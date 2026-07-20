@@ -4,6 +4,7 @@
 #include "tight/types.hpp"
 
 #include "address.hpp"
+#include "buffer_pool.hpp"
 #include "command.hpp"
 #include "crypto.hpp"
 #include "fragmenter.hpp"
@@ -78,7 +79,7 @@ public:
     // back-pressure) never blocks the reactor or the encode thread.
     struct OutboundPacket {
         Peer* m_peer;
-        Bytes m_datagram;
+        PooledBytes m_datagram;   // 池化缓冲（thread_local 块池，无锁复用）
     };
     BlockingQueue<OutboundPacket> m_outbound_queue;
     SmallThread m_sender_thread;
@@ -113,10 +114,10 @@ public:
     Impl(TightConfig cfg)
         : m_config(std::move(cfg)),
           m_encode_queue(m_config.lite_mode
-                             ? std::min<std::size_t>(m_config.encode_queue_limit, 256)
+                             ? std::min<std::size_t>(m_config.encode_queue_limit, 64)
                              : m_config.encode_queue_limit),
           m_outbound_queue(m_config.lite_mode
-                               ? std::min<std::size_t>(m_config.outbound_queue_limit, 1024)
+                               ? std::min<std::size_t>(m_config.outbound_queue_limit, 256)
                                : m_config.outbound_queue_limit),
           m_bandwidth(m_config.initial_bandwidth_bytes) {
         m_local_client_id = static_cast<std::uint32_t>(random_u64() & 0x7FFFFFFFu);
@@ -132,8 +133,23 @@ public:
     // 精简模式下消息排队上限自动收紧
     std::size_t queue_limit() const {
         return m_lite_mode.load()
-                   ? std::min<std::size_t>(m_config.queue_limit, 1024)
+                   ? std::min<std::size_t>(m_config.queue_limit, 128)
                    : m_config.queue_limit;
+    }
+
+    // 单条消息最大长度：配置值自动钳制到 [8KB, 10MB]
+    std::size_t max_message_bytes() const {
+        return std::max<std::size_t>(8 * 1024,
+                   std::min<std::size_t>(m_config.max_message_bytes,
+                                         10 * 1024 * 1024));
+    }
+
+    // 排空节拍：lite 模式（IoT 设备）钳制到 ≥10ms，降低 CPU 唤醒频率
+    // （500次/s → 100次/s），以 ≤10ms 附加延迟换取功耗
+    std::chrono::milliseconds flush_interval() const {
+        return m_lite_mode.load()
+                   ? std::max(m_config.flush_interval, std::chrono::milliseconds(10))
+                   : m_config.flush_interval;
     }
 
     // 运行时切换精简模式（2 线程 <-> 4 线程）。
@@ -141,6 +157,13 @@ public:
     void set_lite_mode(bool lite) {
         std::lock_guard<std::mutex> lock(m_workers_mutex);
         if (lite == m_lite_mode.load()) return;
+        // 丢弃日志随模式切换：lite 静默，普通模式按配置恢复
+        {
+            std::lock_guard<std::mutex> plock(m_peers_mutex);
+            for (auto& kv : m_peers) {
+                kv.second.m_drop_log = m_config.drop_log && !lite;
+            }
+        }
         if (lite) {
             // reactor 先接管合并职责（与工作线程双消费同一队列/同一
             // socket，安全），再令 receiver/encode/sender 退出并 join
@@ -365,6 +388,7 @@ public:
         peer.m_addr_set = true;
         peer.m_role = LinkRole::Node;
         peer.m_reconnect = true;
+        peer.m_drop_log = m_config.drop_log && !m_lite_mode.load();
         m_peer_by_addr[key] = remote.id;
         if (peer.m_state == LinkState::Closed) {
             peer.m_state = LinkState::Handshake;
@@ -376,6 +400,8 @@ public:
 
     bool send_message(const std::string& peer_id, Bytes payload, int priority = 0) {
         if (!m_running.load()) return false;
+        // 单条消息长度上限（默认 64KB，可配置至 10MB）
+        if (payload.size() > max_message_bytes()) return false;
         {
             std::lock_guard<std::mutex> lock(m_send_mutex);
             std::size_t total = 0;
@@ -413,10 +439,9 @@ public:
         }
         header.payload_size = static_cast<std::uint16_t>(payload.size());
         header.tick = static_cast<std::uint32_t>(unix_millis() & 0xFFFFFFFFULL);
-        Bytes datagram = build_wire_packet(&peer, header, payload);
         // 插队: straight to the outbound queue, skipping the send queue, the
         // reactor tick and the encode thread.
-        send_raw(&peer, datagram);
+        send_raw(&peer, build_wire_packet(&peer, header, payload));
         return true;
     }
 
@@ -449,7 +474,7 @@ public:
                 drain_encode();   // 合并 encode 线程职责
                 drain_sender();   // 合并 sender 线程职责
             }
-            next_tick += m_config.flush_interval;
+            next_tick += flush_interval();
             auto now = std::chrono::steady_clock::now();
             if (now < next_tick) {
                 std::this_thread::sleep_for(next_tick - now);
@@ -542,6 +567,7 @@ public:
         peer.m_addr = from;
         peer.m_addr_set = true;
         peer.m_role = LinkRole::Leaf;
+        peer.m_drop_log = m_config.drop_log && !m_lite_mode.load();
         peer.m_state = LinkState::Handshake;
         peer.m_last_handshake_sent = std::chrono::steady_clock::now() - std::chrono::hours(1);
         m_peer_by_addr[key] = id;
@@ -771,7 +797,7 @@ public:
         std::uint32_t rtt_us = static_cast<std::uint32_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(m_bandwidth.rtt()).count());
         Reassembler::handle_data(*peer, header, payload, rtt_us,
-                                 m_config.late_rtt_multiplier,
+                                 m_config.late_rtt_multiplier, max_message_bytes(),
                                  [this](Peer* p, Bytes message) {
                                      deliver_message(p, std::move(message));
                                  });
@@ -939,23 +965,32 @@ public:
         return n;
     }
 
-    // AES-256-GCM 加密负载：输出 密文 || 16B 认证标签。
-    // AAD 为定稿报文头的前 44 字节（含加密标志位与密文长度），
-    // 将密文与报文头绑定，防止头部被篡改。
-    Bytes encrypt_payload(Peer* peer, PacketHeader& header, const Bytes& payload) {
-        if (!m_config.encryption_enabled || !peer->m_crypto_ready) return payload;
-        header.flags |= kFlagEncrypted;
-        header.payload_size = static_cast<std::uint16_t>(payload.size() + kGcmTagSize);
-        auto nonce = build_nonce(header);
-        // AAD 为定稿报文头前 44 字节，栈缓冲编码（零堆分配）
-        std::uint8_t aad[kHeaderSize];
-        PacketCodec::encode_to(header, Bytes{}, aad);
-        Bytes ct(payload.size());
-        std::array<std::uint8_t, kGcmTagSize> tag{};
-        aes256_gcm_encrypt(peer->m_crypto_key, nonce, aad, kHeaderSize - 4,
-                           payload.data(), payload.size(), ct.data(), tag.data());
-        ct.insert(ct.end(), tag.begin(), tag.end());
-        return ct;
+    // 由明文负载单缓冲构建线上报文（池化）：
+    // 头部 → 明文/密文负载 → CRC 定稿，一次分配完成；
+    // 加密时 AES-256-GCM 直接密写进报文负载区（AAD = 头部前 44 字节）。
+    PooledBytes build_wire_packet(Peer* peer, const PacketHeader& header, const Bytes& payload) {
+        PacketHeader wire_header = header;
+        bool encrypted = m_config.encryption_enabled && peer->m_crypto_ready;
+        if (encrypted) {
+            wire_header.flags |= kFlagEncrypted;
+            wire_header.payload_size = static_cast<std::uint16_t>(payload.size() + kGcmTagSize);
+        }
+        PooledBytes datagram(kHeaderSize + wire_header.payload_size);
+        PacketCodec::encode_header_to(wire_header, datagram.data());
+        if (!encrypted) {
+            if (!payload.empty()) {
+                std::memcpy(datagram.data() + kHeaderSize, payload.data(), payload.size());
+            }
+        } else {
+            auto nonce = build_nonce(wire_header);
+            aes256_gcm_encrypt(peer->m_crypto_key, nonce,
+                               datagram.data(), kHeaderSize - 4,   // AAD：头部前 44 字节
+                               payload.data(), payload.size(),
+                               datagram.data() + kHeaderSize,      // 密文
+                               datagram.data() + kHeaderSize + payload.size());  // 16B 标签
+        }
+        PacketCodec::finalize_crc(datagram.data(), datagram.size());
+        return datagram;
     }
 
     // 解密负载并校验认证标签；失败返回 false（调用方丢弃报文）
@@ -977,13 +1012,6 @@ public:
         header.payload_size = static_cast<std::uint16_t>(ct_len);
         header.flags &= ~kFlagEncrypted;   // 恢复 flags 低位语义（数据分片数）
         return true;
-    }
-
-    // 由明文负载构建线上报文：按需加密后编码
-    Bytes build_wire_packet(Peer* peer, const PacketHeader& header, const Bytes& payload) {
-        PacketHeader wire_header = header;
-        Bytes wire = encrypt_payload(peer, wire_header, payload);
-        return PacketCodec::encode(wire_header, wire);
     }
 
     void send_data_packet(Peer* peer, std::uint32_t msg_id, std::uint16_t idx,
@@ -1027,19 +1055,27 @@ public:
                 ps.m_bytes = 0;  // filled in after encode to avoid re-encoding
             }
         }
-        Bytes datagram = build_wire_packet(peer, header, payload);
-        send_raw(peer, datagram);
+        auto datagram = build_wire_packet(peer, header, payload);
+        std::size_t wire_size = datagram.size();
+        send_raw(peer, std::move(datagram));
         if (is_acked_data) {
             std::lock_guard<std::mutex> lock(peer->m_mu);
-            peer->m_pending[header.sequence].m_bytes = datagram.size();
+            peer->m_pending[header.sequence].m_bytes = wire_size;
         }
     }
 
     // Enqueue an outbound packet. The sender thread will do the actual sendto
     // (with token-bucket back-pressure). This MUST NOT block the caller.
+    void send_raw(Peer* peer, PooledBytes datagram) {
+        if (!peer->m_addr_set || m_sock == kInvalidSocket) return;
+        m_outbound_queue.try_push(OutboundPacket{peer, std::move(datagram)});
+    }
+
+    // 控制路径（低频）便捷重载：普通 Bytes 转池化缓冲入队
     void send_raw(Peer* peer, const Bytes& datagram) {
         if (!peer->m_addr_set || m_sock == kInvalidSocket) return;
-        m_outbound_queue.try_push(OutboundPacket{peer, Bytes(datagram)});
+        m_outbound_queue.try_push(
+            OutboundPacket{peer, PooledBytes(datagram.begin(), datagram.end())});
     }
 
     void receiver_loop() {
@@ -1142,7 +1178,7 @@ public:
             auto& peer = kv.second;
             if (peer.m_state != LinkState::Established && peer.m_state != LinkState::Online) continue;
             if (now - peer.m_last_report_sent < m_config.report_interval) continue;
-            Bytes payload = Report::build_payload(peer);
+            Bytes payload = Report::build_payload(peer, m_config.report_interval);
 
             PacketHeader rpt{};
             rpt.magic = kMagic;
@@ -1261,7 +1297,7 @@ public:
     void encode_loop() {
         while (m_running.load(std::memory_order_acquire) &&
                m_workers_running.load(std::memory_order_acquire)) {
-            auto task = m_encode_queue.take_for(m_config.flush_interval);
+            auto task = m_encode_queue.take_for(flush_interval());
             if (!task) continue;
             try {
                 fragment_and_send(task->m_peer, std::move(task->m_payload));

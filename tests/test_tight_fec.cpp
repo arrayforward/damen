@@ -143,7 +143,7 @@ TEST_CASE("reassembler_late_accounting") {
     late_hdr.sequence = 1;
     late_hdr.fragment_count = 0;
     late_hdr.tick = static_cast<std::uint32_t>((unix_millis() - 100) & 0xFFFFFFFFULL);
-    Reassembler::handle_data(peer, late_hdr, Bytes{}, 10000, 4.0, deliver);
+    Reassembler::handle_data(peer, late_hdr, Bytes{}, 10000, 4.0, 64 * 1024, deliver);
     ASSERT_EQ(peer.m_transit_samples, 1u);
     ASSERT_EQ(peer.m_late_samples, 1u);
     ASSERT_FALSE(delivered);
@@ -153,13 +153,13 @@ TEST_CASE("reassembler_late_accounting") {
     ok_hdr.sequence = 2;
     ok_hdr.fragment_count = 0;
     ok_hdr.tick = static_cast<std::uint32_t>(unix_millis() & 0xFFFFFFFFULL);
-    Reassembler::handle_data(peer, ok_hdr, Bytes{}, 10000, 4.0, deliver);
+    Reassembler::handle_data(peer, ok_hdr, Bytes{}, 10000, 4.0, 64 * 1024, deliver);
     ASSERT_EQ(peer.m_transit_samples, 2u);
     ASSERT_EQ(peer.m_late_samples, 1u);
 
     // Unsynced clock -> no accounting at all.
     Peer peer2;
-    Reassembler::handle_data(peer2, ok_hdr, Bytes{}, 10000, 4.0, deliver);
+    Reassembler::handle_data(peer2, ok_hdr, Bytes{}, 10000, 4.0, 64 * 1024, deliver);
     ASSERT_EQ(peer2.m_transit_samples, 0u);
 }
 
@@ -171,7 +171,7 @@ TEST_CASE("report_round_trip_late_ratio_and_probe_bw") {
     rx.m_late_samples = 1;
     rx.m_probe_bw_bps = 12345678;
 
-    Bytes payload = Report::build_payload(rx);
+    Bytes payload = Report::build_payload(rx, std::chrono::milliseconds(1000));
     ASSERT_EQ(payload.size(), 16u);        // no lost seqs + trailing bw field
     ASSERT_EQ(rx.m_transit_samples, 0u);   // counters reset per interval
     ASSERT_EQ(rx.m_probe_bw_bps, 0u);      // attached exactly once

@@ -23,6 +23,12 @@ public:
                                  std::uint8_t* out);
     static bool decode(const std::uint8_t* data, std::size_t size,
                        PacketHeader& header, Bytes& payload);
+
+    // 更细粒度（单缓冲构建线上报文用）：
+    // encode_header_to 只写 48 字节报文头（CRC 域置零），返回 48。
+    // finalize_crc 对已装配好的整报文（头+负载）计算 CRC 并写入 44-47。
+    static std::size_t encode_header_to(const PacketHeader& header, std::uint8_t* out);
+    static void finalize_crc(std::uint8_t* datagram, std::size_t size);
 };
 
 } // namespace tight

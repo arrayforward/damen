@@ -2,7 +2,7 @@
 //
 // 用法：
 //   tight_client [--host 127.0.0.1] [--port 9443] [--token gateway-shared-secret]
-//                [--id device-001] [--name device-001] [--mtu 1200]
+//                [--id device-001] [--name device-001] [--mtu 1350]
 //                [--role leaf|node] [--no-encryption] [--no-speed-test]
 //
 // 连接后进入交互模式，支持命令：
@@ -53,11 +53,12 @@ void print_usage(const char* argv0) {
               << "  --token <令牌>     接入令牌（默认 gateway-shared-secret）\n"
               << "  --id <标识>        本端 tight id（默认 device-001）\n"
               << "  --name <设备名>    hello 中的 device_name（默认同 id）\n"
-              << "  --mtu <字节>       报文 MTU（默认 1200）\n"
+              << "  --mtu <字节>       报文 MTU（默认 1350）\n"
               << "  --role <leaf|node> 链路角色（默认 leaf；node 掉线自动重连）\n"
               << "  --no-encryption    关闭 ECDH+AES-256-GCM 加密\n"
               << "  --no-speed-test    关闭建连测速\n"
               << "  --no-lite          关闭精简模式（客户端默认开启：单线程低占用）\n"
+              << "  --max-message <字节> 单条消息上限（默认 64KB，范围 8KB-10MB）\n"
               << "  --help             显示本帮助\n";
 }
 
@@ -74,7 +75,8 @@ int main(int argc, char* argv[]) {
     std::string token = "gateway-shared-secret";
     std::string id = "device-001";
     std::string name;
-    std::size_t mtu = 1200;
+    std::size_t mtu = 1350;
+    std::size_t max_message = 64 * 1024;
     tight::LinkRole role = tight::LinkRole::Leaf;
     bool encryption = true;
     bool speed_test = true;
@@ -102,6 +104,7 @@ int main(int argc, char* argv[]) {
         else if (arg == "--no-encryption") encryption = false;
         else if (arg == "--no-speed-test") speed_test = false;
         else if (arg == "--no-lite") lite = false;
+        else if (arg == "--max-message") max_message = static_cast<std::size_t>(std::stoul(next("字节数")));
         else if (arg == "--help") { print_usage(argv[0]); return 0; }
         else {
             std::cerr << "未知选项: " << arg << "\n";
@@ -120,6 +123,7 @@ int main(int argc, char* argv[]) {
     cfg.encryption_enabled = encryption;
     cfg.speed_test_enabled = speed_test;
     cfg.lite_mode = lite;
+    cfg.max_message_bytes = max_message;
 
     std::atomic<bool> online{false};
 

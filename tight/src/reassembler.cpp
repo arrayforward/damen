@@ -12,9 +12,28 @@
 
 namespace tight::tight_detail {
 
+namespace {
+
+// 异常消息丢弃日志：每 peer 每秒最多一条（接收线程热路径，
+// 恶意洪水时不能被日志拖垮）
+void log_oversize_drop(Peer& peer, const char* reason, std::uint32_t msg_id,
+                       std::size_t value, std::size_t limit) {
+    auto now = std::chrono::steady_clock::now();
+    if (now - peer.m_oversize_log_ts < std::chrono::seconds(1)) return;
+    peer.m_oversize_log_ts = now;
+    TIGHT_LOG_WARN(std::string("[tight] 丢弃异常消息(") + reason +
+                   "): peer=" + peer.m_id +
+                   " msg_id=" + std::to_string(msg_id) +
+                   " value=" + std::to_string(value) +
+                   " limit=" + std::to_string(limit));
+}
+
+} // namespace
+
 void Reassembler::handle_data(Peer& peer, const PacketHeader& header,
                               const Bytes& payload, std::uint32_t rtt_us,
-                              double late_multiplier, const DeliverCallback& deliver) {
+                              double late_multiplier, std::size_t max_message_bytes,
+                              const DeliverCallback& deliver) {
     std::uint32_t seq = header.sequence;
     auto now = std::chrono::steady_clock::now();
 
@@ -81,6 +100,16 @@ void Reassembler::handle_data(Peer& peer, const PacketHeader& header,
     std::uint16_t idx = header.fragment_index;
     std::uint16_t cnt = header.fragment_count;
     if (idx >= cnt) return;
+    // 条目创建前按配置上限校验分片数：合法发送方的数据分片（除末片外）
+    // 不小于 64 字节，超限的 fragment_count 必为异常/恶意，直接丢弃，
+    // 防止 m_incoming 按虚假分片数预分配耗尽内存。
+    const std::size_t max_fragments = max_message_bytes / 64 + 8;
+    if (cnt > max_fragments) {
+        if (peer.m_drop_log) {
+            log_oversize_drop(peer, "fragment_count 超限", header.message_id, cnt, max_fragments);
+        }
+        return;
+    }
     auto& in = peer.m_incoming[header.message_id];
     {
         std::lock_guard<std::mutex> lock(peer.m_mu);
@@ -99,7 +128,7 @@ void Reassembler::handle_data(Peer& peer, const PacketHeader& header,
             in.m_sizes[idx] = header.reserved;
         }
     }
-    bool assembled = try_assemble(peer, in, deliver);
+    bool assembled = try_assemble(peer, in, max_message_bytes, deliver);
     if (assembled) {
         std::lock_guard<std::mutex> lock(peer.m_mu);
         peer.m_completed[header.message_id] = now;
@@ -108,6 +137,7 @@ void Reassembler::handle_data(Peer& peer, const PacketHeader& header,
 }
 
 bool Reassembler::try_assemble(Peer& peer, IncomingMessage& in,
+                               std::size_t max_message_bytes,
                                const DeliverCallback& deliver) {
     if (in.m_total_count < 2) return false;
     std::size_t data_count = in.m_data_count > 0 ? in.m_data_count : (in.m_total_count - 1);
@@ -136,6 +166,13 @@ bool Reassembler::try_assemble(Peer& peer, IncomingMessage& in,
         std::uint32_t total_be = 0;
         std::memcpy(&total_be, prefix, 4);
         std::uint32_t total = to_be32(total_be);
+        // 报文声明总长超过配置上限：视为异常消息，丢弃不投递
+        if (total > max_message_bytes) {
+            if (peer.m_drop_log) {
+                log_oversize_drop(peer, "消息总长超限", in.m_message_id, total, max_message_bytes);
+            }
+            return Bytes{};
+        }
         if (total > stream_len - 4) total = static_cast<std::uint32_t>(stream_len - 4);
 
         Bytes result(total);

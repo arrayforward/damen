@@ -97,6 +97,7 @@ public:
         tc.heartbeat = m_config.m_tight.heartbeat;
         tc.dead_timeout = m_config.m_tight.dead_timeout;
         tc.queue_limit = m_config.m_server.max_payload_bytes;
+        tc.max_message_bytes = m_config.m_server.max_payload_bytes;
 
         m_transport = std::make_unique<tight::TightTransport>(tc);
         m_transport->set_message_callback(

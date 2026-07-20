@@ -86,7 +86,7 @@ std::uint64_t unix_millis();   // 当前 Unix 毫秒
 | `id` | std::string | — | 本端标识（空 id 由对端分配 anon 身份） |
 | `token` | std::string | — | 接入令牌，握手校验，两端必须一致 |
 | `role` | LinkRole | Leaf | Node 掉线后自动重连 |
-| `mtu` | std::size_t | 1200 | 单个报文最大字节（含 48 字节头） |
+| `mtu` | std::size_t | 1350 | 单个报文最大字节（含 48 字节头） |
 | `heartbeat` | milliseconds | 5s | 心跳间隔（兼作时钟对表节拍） |
 | `report_interval` | milliseconds | 1s | 链路报告周期（慢包率/丢包/测速带宽） |
 | `flush_interval` | milliseconds | 10ms | reactor 节拍 |
@@ -99,8 +99,8 @@ std::uint64_t unix_millis();   // 当前 Unix 毫秒
 | `speed_test_bytes` | std::size_t | 100KB | 测速列车大小 |
 | `encryption_enabled` | bool | true | ECDH + AES-256-GCM 开关 |
 | `socket_buffer_bytes` | std::size_t | 8MB | SO_RCVBUF/SO_SNDBUF 各自大小（lite ≤16KB） |
-| `encode_queue_limit` | std::size_t | 4096 | 分片编码队列容量（lite ≤256） |
-| `outbound_queue_limit` | std::size_t | 65536 | 出站报文队列容量（lite ≤1024） |
+| `encode_queue_limit` | std::size_t | 4096 | 分片编码队列容量（lite ≤64） |
+| `outbound_queue_limit` | std::size_t | 65536 | 出站报文队列容量（lite ≤256） |
 | `lite_mode` | bool | false | 客户端精简模式：单线程 + 64KB 小栈 + 小缓冲小队列 |
 
 ### 1.4 PacketCodec（`creek/tight/packet_codec.hpp`）

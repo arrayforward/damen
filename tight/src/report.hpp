@@ -15,6 +15,7 @@
 
 #include "tight/types.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 
@@ -30,7 +31,8 @@ public:
 
     // Builds the report payload (ack cursor, late ratio, lost sequences,
     // probed bandwidth) and resets the peer's per-interval counters.
-    static Bytes build_payload(Peer& peer);
+    // report_interval 用于推导 NACK 放弃时限（kMaxRetries + 2 个周期）。
+    static Bytes build_payload(Peer& peer, std::chrono::milliseconds report_interval);
 
     // Handles an incoming report payload: updates the peer's late ratio,
     // prunes acknowledged pendings, and retransmits lost ones via the

@@ -9,8 +9,7 @@ namespace tight {
 
 using namespace tight_detail;
 
-std::size_t PacketCodec::encode_to(const PacketHeader& header, const Bytes& payload,
-                                   std::uint8_t* out) {
+std::size_t PacketCodec::encode_header_to(const PacketHeader& header, std::uint8_t* out) {
     std::uint8_t* p = out;
 
     auto put32 = [&](std::size_t off, std::uint32_t v) {
@@ -43,18 +42,27 @@ std::size_t PacketCodec::encode_to(const PacketHeader& header, const Bytes& payl
     put16(38, header.reserved);
     put32(40, header.tick);
     put32(44, 0);
+    return kHeaderSize;
+}
 
+void PacketCodec::finalize_crc(std::uint8_t* datagram, std::size_t size) {
+    if (size < kHeaderSize) return;
+    std::memset(datagram + 44, 0, 4);
+    // 流式 CRC：头 44 字节（含已清零的 CRC 域）+ 负载，一步完成
+    std::uint32_t crc = crc32_update(0xFFFFFFFFU, datagram, size);
+    std::uint32_t be = to_be32(crc ^ 0xFFFFFFFFU);
+    std::memcpy(datagram + 44, &be, 4);
+}
+
+std::size_t PacketCodec::encode_to(const PacketHeader& header, const Bytes& payload,
+                                   std::uint8_t* out) {
+    std::size_t total = encode_header_to(header, out);
     if (!payload.empty()) {
-        std::memcpy(p + kHeaderSize, payload.data(), payload.size());
+        std::memcpy(out + kHeaderSize, payload.data(), payload.size());
+        total += payload.size();
     }
-
-    // 流式 CRC：头 44 字节 + 4 个零字节 + 负载
-    std::uint32_t crc = crc32_update(0xFFFFFFFFU, p, 44);
-    const std::uint8_t zeros[4] = {0, 0, 0, 0};
-    crc = crc32_update(crc, zeros, 4);
-    crc = crc32_update(crc, p + kHeaderSize, payload.size());
-    put32(44, crc ^ 0xFFFFFFFFU);
-    return kHeaderSize + payload.size();
+    finalize_crc(out, total);
+    return total;
 }
 
 Bytes PacketCodec::encode(const PacketHeader& header, const Bytes& payload) {

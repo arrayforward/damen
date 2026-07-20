@@ -105,6 +105,12 @@ struct Peer {
     // 双方 client_id 排序拼接为 salt 经 HKDF-SHA256 派生。
     bool m_crypto_ready{false};
     std::array<std::uint8_t, 32> m_crypto_key{};
+
+    // 异常消息丢弃日志：由配置 TightConfig::drop_log 决定（默认开），
+    // lite_mode 端点自动关闭（静默丢弃）；建 peer 时写入。
+    bool m_drop_log{true};
+    // 限流时间戳（每 peer 每秒最多一条，防日志洪水）
+    std::chrono::steady_clock::time_point m_oversize_log_ts{};
 };
 
 // A probe train is considered finished once no Probe packet has arrived for

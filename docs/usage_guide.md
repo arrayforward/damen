@@ -137,7 +137,7 @@ t.send("gateway-9443", tight::Bytes(hello.begin(), hello.end()));
 ### 3.5 命令通道（控制/按键）
 
 ```cpp
-// 发送（单报文 ≤ mtu-48；默认 mtu 1200 时 ≤ 1152 字节，超限返回 false）
+// 发送（单报文 ≤ mtu-48；默认 mtu 1350 时 ≤ 1302 字节，超限返回 false）
 t.send_command("gateway-9443", {'v','o','l','+',});
 
 // 接收（保序投递；乱序最多等待 3×RTT，缺口超时跳过，迟到包丢弃）

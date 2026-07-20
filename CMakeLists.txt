@@ -72,6 +72,9 @@ add_gateway_test(test_command     tests/test_command.cpp)
 add_gateway_test(test_crypto      tests/test_crypto.cpp)
 add_gateway_test(test_e2e_final   tests/test_e2e_final.cpp)
 add_gateway_test(test_e2e_sim     tests/test_e2e_sim.cpp)
+add_gateway_test(test_mem8k       tests/test_mem8k.cpp)
+add_executable(test_mem8k_split tests/test_mem8k_split.cpp)
+target_link_libraries(test_mem8k_split PRIVATE tight Threads::Threads ${EXTRA_LIBS})
 
 # 早期调试测试（已废弃，不参与 ctest，仅保留编译参考）
 add_executable(test_e2e     tests/test_e2e.cpp)

@@ -79,14 +79,25 @@ struct TightConfig {
     std::string   id;
     std::string   token;
     LinkRole      role{LinkRole::Leaf};
-    std::size_t    mtu{1200};
+    // 1350：单包载荷 1350-48(头)-16(GCM)=1286B，恰好整包容纳
+    // 16kHz 单声道 PCM 40ms 帧（1280B），音视频场景免分片
+    std::size_t    mtu{1350};
     std::chrono::milliseconds heartbeat{std::chrono::seconds(5)};
     std::chrono::milliseconds report_interval{std::chrono::seconds(1)};
+    // 排空节拍。lite 模式自动钳制到 ≥10ms（IoT 设备降 CPU 唤醒/功耗，
+    // 附加延迟 ≤10ms）；普通模式按配置值（可低至 1-2ms 保音频延迟）
     std::chrono::milliseconds flush_interval{std::chrono::milliseconds(10)};
     std::chrono::milliseconds dead_timeout{std::chrono::seconds(30)};
     std::chrono::milliseconds retransmit_timeout{std::chrono::milliseconds(500)};
     std::uint64_t  initial_bandwidth_bytes{100 * 1024 * 1024};
     std::size_t    queue_limit{65536};
+    // 单条应用消息的最大长度（默认 64KB）。发送超限返回 false；
+    // 接收侧按此上限防御异常 fragment_count（防内存耗尽）。
+    // 有效范围自动钳制到 [8KB, 10MB]。
+    std::size_t    max_message_bytes{64 * 1024};
+    // 丢弃异常消息（超限/畸形分片）时输出告警日志。仅服务器端开启；
+    // lite_mode 端点自动关闭（静默丢弃），不受此开关影响。
+    bool           drop_log{true};
     // A data packet is "late" when its transit time (one-way, computed with
     // the per-peer clock offset) exceeds late_rtt_multiplier * RTT.
     double           late_rtt_multiplier{4.0};
@@ -104,7 +115,7 @@ struct TightConfig {
     std::size_t    outbound_queue_limit{65536};
     // 客户端精简模式：单线程（receiver/encode/sender 职责全部由 reactor
     // 节拍合并）、线程使用 64KB 小栈、内核缓冲与队列上限自动收紧
-    // （socket_buffer≤16KB、encode≤256、outbound≤1024、queue_limit≤1024），
+    // （socket_buffer≤16KB、encode≤64、outbound≤256、queue_limit≤128），
     // 面向嵌入式/单连接客户端；可经 set_lite_mode() 运行时动态切换
     bool             lite_mode{false};
 };

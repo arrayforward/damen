@@ -12,7 +12,7 @@
 
 namespace tight::tight_detail {
 
-Bytes Report::build_payload(Peer& peer) {
+Bytes Report::build_payload(Peer& peer, std::chrono::milliseconds report_interval) {
     auto now = std::chrono::steady_clock::now();
     std::vector<std::uint32_t> lost_seqs;
     std::uint16_t ratio_val;
@@ -27,15 +27,36 @@ Bytes Report::build_payload(Peer& peer) {
         std::uint32_t rtt_threshold = peer.m_sender_rtt_us > 0 ? peer.m_sender_rtt_us : 10000;
         std::uint32_t loss_threshold = rtt_threshold * 7 / 2;
         if (rtt_threshold < 10000) loss_threshold = 100000;
+        const auto give_up_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            report_interval * (kMaxRetries + 2)).count();
 
         for (auto mit = peer.m_missing_seqs.begin(); mit != peer.m_missing_seqs.end();) {
             auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(now - mit->second).count();
-            if (elapsed_us > static_cast<long long>(loss_threshold)) {
-                lost_seqs.push_back(mit->first);
+            if (elapsed_us > give_up_us) {
+                // 对端长期未重传（Report 全丢或对端已放弃）：停止上报。
+                // 缺口已在越限时跳过，ack 游标不受影响。
                 mit = peer.m_missing_seqs.erase(mit);
-            } else {
-                ++mit;
+                continue;
             }
+            if (elapsed_us > static_cast<long long>(loss_threshold)) {
+                // 确认前每个周期重复上报（不擦除）；重传到达时由
+                // Reassembler 从 m_missing_seqs 移除，自然停止。
+                lost_seqs.push_back(mit->first);
+                // 超过 3.5×RTT 即跳过缺口：ack 游标不停滞，发送端可正常
+                // 修剪已确认 pending；迟到的重传仍会被正常投递。
+                if (peer.m_seq_initialized && mit->first == peer.m_next_expected_seq) {
+                    ++peer.m_next_expected_seq;
+                    while (peer.m_recv_seqs.count(peer.m_next_expected_seq)) {
+                        peer.m_recv_seqs.erase(peer.m_next_expected_seq);
+                        ++peer.m_next_expected_seq;
+                    }
+                }
+            }
+            ++mit;
+        }
+        // 硬上限：防御极端丢包下 missing 表无限增长（约 3MB/peer/千条级）
+        while (peer.m_missing_seqs.size() > 4096) {
+            peer.m_missing_seqs.erase(peer.m_missing_seqs.begin());
         }
 
         // Late-packet ratio over this report interval (slow-packet rate, NOT
@@ -133,7 +154,10 @@ std::uint64_t Report::handle(Peer& peer, const Bytes& payload, const ResendCallb
             }
         }
         for (auto it = peer.m_pending.begin(); it != peer.m_pending.end();) {
-            if (it->first <= ack_seq && !lost_seqs.count(it->first)) {
+            // 重传次数耗尽的 pending 一并修剪：接收端放弃后 ack 游标
+            // 会跳过该缺口，此处防止 m_pending 无限滞留。
+            if ((it->first <= ack_seq && !lost_seqs.count(it->first)) ||
+                it->second.m_retries >= kMaxRetries) {
                 it = peer.m_pending.erase(it);
             } else {
                 ++it;

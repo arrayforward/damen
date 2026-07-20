@@ -12,7 +12,7 @@ struct GatewayConfig {
         std::uint16_t port{9443};
         std::string id;
         std::string token{"gateway-token"};
-        std::size_t mtu{1200};
+        std::size_t mtu{1350};
         std::chrono::milliseconds heartbeat{std::chrono::seconds(5)};
         std::chrono::milliseconds dead_timeout{std::chrono::seconds(30)};
     } m_tight;
