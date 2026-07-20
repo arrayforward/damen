@@ -157,6 +157,11 @@ cfg.encryption_enabled = true;        // ECDH + AES-256-GCM
 cfg.initial_bandwidth_bytes = 100 * 1024 * 1024;  // 初始限速（测速后更新）
 cfg.heartbeat = std::chrono::seconds(5);
 cfg.dead_timeout = std::chrono::seconds(30);
+
+// 嵌入式/客户端精简模式（服务器端保持普通模式即可，互不影响）：
+// 单线程事件循环 + 64KB 小栈 + 16KB 内核缓冲 + 小队列，空闲实例约 76KB
+cfg.lite_mode = true;
+// 也可运行时动态切换：t.set_lite_mode(false);  // 升级为完整 4 线程模式
 ```
 
 ---

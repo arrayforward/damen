@@ -79,5 +79,7 @@ t.stop();
 | `late_rtt_multiplier` | 4.0 | 慢包阈值（传输时间 > 倍数 × RTT） |
 | `heartbeat` / `dead_timeout` | 5s / 30s | 保活与掉线检测 |
 | `initial_bandwidth_bytes` | 100MB/s | 初始限速（测速后自动校准） |
+| `lite_mode` | false | 客户端精简模式：单线程 + 64KB 小栈 + 小缓冲（空闲实例约 76KB），`set_lite_mode()` 可运行时切换 |
+| `socket_buffer_bytes` | 8MB | 内核收/发缓冲各自大小（lite ≤16KB） |
 
 完整 API 见 [../docs/api_reference.md](../docs/api_reference.md)，架构细节见 [../docs/architecture.md](../docs/architecture.md)。

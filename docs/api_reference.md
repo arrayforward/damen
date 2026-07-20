@@ -37,6 +37,11 @@ public:
 
     std::vector<PeerEvent> peers() const;   // 当前 peer 快照
     std::uint16_t local_port() const;       // 实际绑定端口
+
+    // 运行时动态切换精简模式（本端本地属性，不影响对端；队列容量按
+    // 构造时配置固定，切换只改变线程模型）
+    void set_lite_mode(bool lite);
+    bool lite_mode() const;
 };
 ```
 
@@ -93,6 +98,10 @@ std::uint64_t unix_millis();   // 当前 Unix 毫秒
 | `speed_test_enabled` | bool | true | 建连测速开关 |
 | `speed_test_bytes` | std::size_t | 100KB | 测速列车大小 |
 | `encryption_enabled` | bool | true | ECDH + AES-256-GCM 开关 |
+| `socket_buffer_bytes` | std::size_t | 8MB | SO_RCVBUF/SO_SNDBUF 各自大小（lite ≤16KB） |
+| `encode_queue_limit` | std::size_t | 4096 | 分片编码队列容量（lite ≤256） |
+| `outbound_queue_limit` | std::size_t | 65536 | 出站报文队列容量（lite ≤1024） |
+| `lite_mode` | bool | false | 客户端精简模式：单线程 + 64KB 小栈 + 小缓冲小队列 |
 
 ### 1.4 PacketCodec（`creek/tight/packet_codec.hpp`）
 

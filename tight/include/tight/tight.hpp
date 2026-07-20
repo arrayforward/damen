@@ -44,6 +44,14 @@ public:
     // Returns false when the payload exceeds one datagram.
     bool send_command(const std::string& peer_id, Bytes payload);
 
+    // 运行时动态切换精简模式（本端本地属性，不影响对端）：
+    //   true  —— 单线程（receiver/encode/sender 职责并入 reactor 节拍），
+    //            64KB 小栈、小缓冲小队列，空闲实例约 76KB
+    //   false —— 4 线程（reactor/receiver/encode/sender 全分离）
+    // 队列容量按构造时配置固定，切换只改变线程模型；start() 前后均可调用。
+    void set_lite_mode(bool lite);
+    bool lite_mode() const;
+
     std::vector<PeerEvent> peers() const;
     std::uint16_t local_port() const;
 

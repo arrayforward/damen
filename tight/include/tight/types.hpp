@@ -98,6 +98,15 @@ struct TightConfig {
     // ECDH + AEAD：握手阶段交换 X25519 公钥并 HKDF 派生会话密钥，
     // 数据分组（Data/Parity/Command）使用 AES-256-GCM 加密
     bool             encryption_enabled{true};
+    // 资源占用：socket 内核缓冲（SO_RCVBUF/SO_SNDBUF 各自大小）与内部队列容量
+    std::size_t    socket_buffer_bytes{8 * 1024 * 1024};
+    std::size_t    encode_queue_limit{4096};
+    std::size_t    outbound_queue_limit{65536};
+    // 客户端精简模式：单线程（receiver/encode/sender 职责全部由 reactor
+    // 节拍合并）、线程使用 64KB 小栈、内核缓冲与队列上限自动收紧
+    // （socket_buffer≤16KB、encode≤256、outbound≤1024、queue_limit≤1024），
+    // 面向嵌入式/单连接客户端；可经 set_lite_mode() 运行时动态切换
+    bool             lite_mode{false};
 };
 
 inline std::uint64_t unix_millis() {

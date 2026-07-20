@@ -14,6 +14,7 @@
 //   config <json>    发送 config_update
 //   cmd <文本>       通过命令通道发送控制指令（保序、插队、单报文）
 //   peers            显示当前链路状态
+//   lite on|off      运行时切换精简模式（默认 on：单线程低占用）
 //   help             显示帮助
 //   quit / exit      退出
 //
@@ -56,12 +57,13 @@ void print_usage(const char* argv0) {
               << "  --role <leaf|node> 链路角色（默认 leaf；node 掉线自动重连）\n"
               << "  --no-encryption    关闭 ECDH+AES-256-GCM 加密\n"
               << "  --no-speed-test    关闭建连测速\n"
+              << "  --no-lite          关闭精简模式（客户端默认开启：单线程低占用）\n"
               << "  --help             显示本帮助\n";
 }
 
 void print_help() {
     std::cout << "命令: hello | ping | bye | send <文本> | audio [帧数] |\n"
-              << "      config <json> | cmd <文本> | peers | help | quit\n";
+              << "      config <json> | cmd <文本> | peers | lite on|off | help | quit\n";
 }
 
 } // namespace
@@ -76,6 +78,7 @@ int main(int argc, char* argv[]) {
     tight::LinkRole role = tight::LinkRole::Leaf;
     bool encryption = true;
     bool speed_test = true;
+    bool lite = true;   // 客户端默认精简模式（服务器端保持普通模式，互不影响）
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -98,6 +101,7 @@ int main(int argc, char* argv[]) {
         }
         else if (arg == "--no-encryption") encryption = false;
         else if (arg == "--no-speed-test") speed_test = false;
+        else if (arg == "--no-lite") lite = false;
         else if (arg == "--help") { print_usage(argv[0]); return 0; }
         else {
             std::cerr << "未知选项: " << arg << "\n";
@@ -115,6 +119,7 @@ int main(int argc, char* argv[]) {
     cfg.mtu = mtu;
     cfg.encryption_enabled = encryption;
     cfg.speed_test_enabled = speed_test;
+    cfg.lite_mode = lite;
 
     std::atomic<bool> online{false};
 
@@ -148,6 +153,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     print("[信息] 本地端口 " + std::to_string(transport.local_port()) +
+          (transport.lite_mode() ? "（精简模式）" : "（完整模式）") +
           "，正在连接 " + host + ":" + std::to_string(port) + " ...");
 
     tight::RemotePeer gateway{gateway_id, tight::NetAddress(host, port)};
@@ -214,6 +220,18 @@ int main(int argc, char* argv[]) {
                                              tight::Bytes(rest.begin(), rest.end()));
             print(ok ? "[发送] 命令 " + std::to_string(rest.size()) + " 字节"
                      : "[错误] 命令发送失败（超单报文上限或未 Online）");
+        } else if (verb == "lite") {
+            if (rest == "on") {
+                transport.set_lite_mode(true);
+                print("[模式] 已切换为精简模式（单线程）");
+            } else if (rest == "off") {
+                transport.set_lite_mode(false);
+                print("[模式] 已切换为完整模式（完整 4 线程）");
+            } else {
+                print(std::string("[模式] 当前: ") +
+                      (transport.lite_mode() ? "精简模式（单线程）" : "完整模式（完整 4 线程）") +
+                      "，用法: lite on|off");
+            }
         } else if (verb == "peers") {
             for (const auto& ev : transport.peers()) {
                 print("[链路] " + ev.id + " state=" +

@@ -10,6 +10,7 @@
 #include "peer.hpp"
 #include "reassembler.hpp"
 #include "report.hpp"
+#include "small_thread.hpp"
 #include "socket_platform.hpp"
 #include "wire_format.hpp"
 #include "wsa.hpp"
@@ -41,7 +42,21 @@ public:
     NativeSocket m_sock{kInvalidSocket};
     std::uint16_t m_local_port{};
     std::atomic<bool> m_running{false};
-    std::thread m_reactor_thread;
+    SmallThread m_reactor_thread;
+
+    // 精简模式可运行时动态切换：m_lite_mode=true 时 reactor 合并
+    // encode/sender 职责（2 线程）；false 时独立工作线程（4 线程）。
+    // m_workers_running 单独控制 encode/sender 线程生命周期，
+    // m_workers_mutex 串行化 spawn/join。
+    std::atomic<bool> m_lite_mode{false};
+    std::atomic<bool> m_workers_running{false};
+    std::mutex m_workers_mutex;
+
+    // 精简模式线程使用 64KB 小栈（std::thread 默认 1MB 预留）；
+    // 完整模式使用系统默认栈
+    std::size_t thread_stack() const {
+        return m_lite_mode.load() ? 64 * 1024 : 0;
+    }
 
     mutable std::mutex m_send_mutex;
     std::map<int, std::deque<std::pair<std::string, Bytes>>> m_send_queue;
@@ -54,8 +69,8 @@ public:
         Peer* m_peer;
         Bytes m_payload;
     };
-    BlockingQueue<EncodeTask> m_encode_queue{4096};
-    std::thread m_encode_thread;
+    BlockingQueue<EncodeTask> m_encode_queue;
+    SmallThread m_encode_thread;
 
     // Single-producer-multiple-consumer outbound packet queue.
     // The sender thread drains this and calls ::sendto; reactor and encode
@@ -65,11 +80,13 @@ public:
         Peer* m_peer;
         Bytes m_datagram;
     };
-    BlockingQueue<OutboundPacket> m_outbound_queue{65536};
-    std::thread m_sender_thread;
+    BlockingQueue<OutboundPacket> m_outbound_queue;
+    SmallThread m_sender_thread;
+    // 精简模式（lite_mode）下 reactor 合并 sender 职责时的当前待发报文
+    std::optional<OutboundPacket> m_lite_pending;
 
     // Dedicated receiver thread. Calls recvfrom + handle_packet.
-    std::thread m_receiver_thread;
+    SmallThread m_receiver_thread;
 
     std::map<std::string, Peer> m_peers;
     std::map<AddrKey, std::string> m_peer_by_addr;
@@ -95,13 +112,76 @@ public:
 
     Impl(TightConfig cfg)
         : m_config(std::move(cfg)),
+          m_encode_queue(m_config.lite_mode
+                             ? std::min<std::size_t>(m_config.encode_queue_limit, 256)
+                             : m_config.encode_queue_limit),
+          m_outbound_queue(m_config.lite_mode
+                               ? std::min<std::size_t>(m_config.outbound_queue_limit, 1024)
+                               : m_config.outbound_queue_limit),
           m_bandwidth(m_config.initial_bandwidth_bytes) {
         m_local_client_id = static_cast<std::uint32_t>(random_u64() & 0x7FFFFFFFu);
         m_local_session_id = random_u64();
         if (m_local_client_id == 0) m_local_client_id = 1;
         m_token_bucket_time = std::chrono::steady_clock::now();
+        m_lite_mode.store(m_config.lite_mode);
         if (m_config.encryption_enabled) {
             m_local_keypair = x25519_generate();
+        }
+    }
+
+    // 精简模式下消息排队上限自动收紧
+    std::size_t queue_limit() const {
+        return m_lite_mode.load()
+                   ? std::min<std::size_t>(m_config.queue_limit, 1024)
+                   : m_config.queue_limit;
+    }
+
+    // 运行时切换精简模式（2 线程 <-> 4 线程）。
+    // 队列容量按构造时配置固定，切换只改变线程模型。
+    void set_lite_mode(bool lite) {
+        std::lock_guard<std::mutex> lock(m_workers_mutex);
+        if (lite == m_lite_mode.load()) return;
+        if (lite) {
+            // reactor 先接管合并职责（与工作线程双消费同一队列/同一
+            // socket，安全），再令 receiver/encode/sender 退出并 join
+            m_lite_mode.store(true);
+            m_workers_running.store(false);
+            if (m_receiver_thread.joinable()) {
+                try { m_receiver_thread.join(); } catch (...) {}
+            }
+            if (m_encode_thread.joinable()) {
+                try { m_encode_thread.join(); } catch (...) {}
+            }
+            if (m_sender_thread.joinable()) {
+                try { m_sender_thread.join(); } catch (...) {}
+            }
+        } else {
+            // 先把 reactor 槽位中的待发报文发掉，避免升级后滞留
+            if (m_lite_pending) {
+                auto& pkt = *m_lite_pending;
+                if (pkt.m_peer->m_addr_set && m_sock != kInvalidSocket) {
+                    tight_sendto(m_sock,
+                                 reinterpret_cast<const char*>(pkt.m_datagram.data()),
+                                 static_cast<int>(pkt.m_datagram.size()), 0,
+                                 reinterpret_cast<const sockaddr*>(&pkt.m_peer->m_addr),
+                                 static_cast<int>(sizeof(pkt.m_peer->m_addr)));
+                }
+                m_lite_pending.reset();
+            }
+            // 先启动工作线程再退出精简合并，避免队列无人消费
+            if (m_running.load()) {
+                m_workers_running.store(true);
+                if (!m_receiver_thread.joinable()) {
+                    m_receiver_thread = SmallThread([this] { receiver_loop(); }, 0);
+                }
+                if (!m_encode_thread.joinable()) {
+                    m_encode_thread = SmallThread([this] { encode_loop(); }, 0);
+                }
+                if (!m_sender_thread.joinable()) {
+                    m_sender_thread = SmallThread([this] { sender_loop(); }, 0);
+                }
+            }
+            m_lite_mode.store(false);
         }
     }
 
@@ -194,7 +274,10 @@ public:
         // per-packet work (dispatch + logging), so a small kernel buffer
         // (Windows default 64 KiB ~ 54 x 1200-byte datagrams) overflows and
         // silently drops datagrams under any burst. 8 MiB absorbs bursts.
-        int bufsize = 8 * 1024 * 1024;
+        // lite_mode 自动收紧到 16 KiB（客户端单连接无突发汇聚场景）。
+        std::size_t buf_bytes = m_config.socket_buffer_bytes;
+        if (m_config.lite_mode) buf_bytes = std::min<std::size_t>(buf_bytes, 16 * 1024);
+        int bufsize = static_cast<int>(buf_bytes);
         tight_setsockopt(m_sock, SOL_SOCKET, SO_RCVBUF,
                          reinterpret_cast<const char*>(&bufsize), sizeof(bufsize));
         tight_setsockopt(m_sock, SOL_SOCKET, SO_SNDBUF,
@@ -224,10 +307,15 @@ public:
         }
 
         m_running.store(true);
-        m_reactor_thread = std::thread([this] { reactor_loop(); });
-        m_receiver_thread = std::thread([this] { receiver_loop(); });
-        m_encode_thread = std::thread([this] { encode_loop(); });
-        m_sender_thread = std::thread([this] { sender_loop(); });
+        // 精简模式单线程：receiver 职责同样由 reactor 节拍合并（drain_receiver）
+        m_reactor_thread = SmallThread([this] { reactor_loop(); }, thread_stack());
+        if (!m_lite_mode.load()) {
+            // 完整模式 4 线程
+            m_workers_running.store(true);
+            m_receiver_thread = SmallThread([this] { receiver_loop(); }, 0);
+            m_encode_thread = SmallThread([this] { encode_loop(); }, 0);
+            m_sender_thread = SmallThread([this] { sender_loop(); }, 0);
+        }
         return true;
     }
 
@@ -235,6 +323,7 @@ public:
         if (!m_running.exchange(false)) {
             return;
         }
+        m_workers_running.store(false);
         m_encode_queue.close();
         m_outbound_queue.close();
         if (m_reactor_thread.joinable()) {
@@ -291,7 +380,7 @@ public:
             std::lock_guard<std::mutex> lock(m_send_mutex);
             std::size_t total = 0;
             for (const auto& kv : m_send_queue) total += kv.second.size();
-            if (total >= m_config.queue_limit) return false;
+            if (total >= queue_limit()) return false;
             m_send_queue[priority].emplace_back(peer_id, std::move(payload));
         }
         return true;
@@ -355,6 +444,11 @@ public:
             check_offline();
             flush_commands();
             process_send_queue();
+            if (m_lite_mode.load(std::memory_order_acquire)) {
+                drain_receiver(); // 合并 receiver 线程职责
+                drain_encode();   // 合并 encode 线程职责
+                drain_sender();   // 合并 sender 线程职责
+            }
             next_tick += m_config.flush_interval;
             auto now = std::chrono::steady_clock::now();
             if (now < next_tick) {
@@ -362,6 +456,61 @@ public:
             } else {
                 std::this_thread::yield();
             }
+        }
+    }
+
+    // 精简模式：reactor 节拍内顺带收包（替代独立 receiver 线程）。
+    // socket 为非阻塞，每拍最多处理 64 个报文，保证 reactor 不被饿死。
+    void drain_receiver() {
+        std::uint8_t buf[2048];
+        for (int i = 0; i < 64; ++i) {
+            sockaddr_in from{};
+            SockLen flen = sizeof(from);
+            int n = tight_recvfrom(m_sock, reinterpret_cast<char*>(buf),
+                                   static_cast<int>(sizeof(buf)), 0,
+                                   reinterpret_cast<sockaddr*>(&from), &flen);
+            if (n < 0) return;
+            if (static_cast<std::size_t>(n) < kHeaderSize) continue;
+            Bytes datagram(buf, buf + n);
+            PacketHeader header{};
+            Bytes payload;
+            if (!PacketCodec::decode(datagram, header, payload)) continue;
+            handle_packet(from, header, payload);
+        }
+    }
+
+    // 精简模式：reactor 节拍内顺带消费编码队列（替代独立 encode 线程）
+    void drain_encode() {
+        for (int i = 0; i < 16; ++i) {
+            auto task = m_encode_queue.poll();
+            if (!task) return;
+            try { fragment_and_send(task->m_peer, std::move(task->m_payload)); } catch (...) {}
+        }
+    }
+
+    // 精简模式：reactor 节拍内顺带消费出站队列（替代独立 sender 线程）。
+    // 令牌不足时保留当前报文到下一拍，不阻塞 reactor。
+    void drain_sender() {
+        for (int i = 0; i < 64; ++i) {
+            if (!m_lite_pending) {
+                auto pkt = m_outbound_queue.poll();
+                if (!pkt) return;
+                m_lite_pending = std::move(*pkt);
+            }
+            auto& pkt = *m_lite_pending;
+            if (!pkt.m_peer->m_addr_set || m_sock == kInvalidSocket) {
+                m_lite_pending.reset();
+                continue;
+            }
+            double cost = static_cast<double>(pkt.m_datagram.size());
+            refill_token_bucket();
+            if (m_token_bucket < cost) return;   // 令牌不足，下一拍再发
+            m_token_bucket -= cost;
+            tight_sendto(m_sock, reinterpret_cast<const char*>(pkt.m_datagram.data()),
+                         static_cast<int>(pkt.m_datagram.size()), 0,
+                         reinterpret_cast<const sockaddr*>(&pkt.m_peer->m_addr),
+                         static_cast<int>(sizeof(pkt.m_peer->m_addr)));
+            m_lite_pending.reset();
         }
     }
 
@@ -889,7 +1038,8 @@ public:
         // Continuously recvfrom and dispatch to handle_packet. This
         // guarantees the reactor thread is never blocked on socket I/O.
         std::uint8_t buf[2048];
-        while (m_running.load(std::memory_order_acquire)) {
+        while (m_running.load(std::memory_order_acquire) &&
+               m_workers_running.load(std::memory_order_acquire)) {
             sockaddr_in from{};
             SockLen flen = sizeof(from);
             int n = tight_recvfrom(m_sock, reinterpret_cast<char*>(buf),
@@ -916,7 +1066,8 @@ public:
     }
 
     void sender_loop() {
-        while (m_running.load(std::memory_order_acquire)) {
+        while (m_running.load(std::memory_order_acquire) &&
+               m_workers_running.load(std::memory_order_acquire)) {
             OutboundPacket pkt;
             // Wait briefly for a packet.
             auto opt = m_outbound_queue.take_for(std::chrono::milliseconds(10));
@@ -1100,7 +1251,8 @@ public:
     }
 
     void encode_loop() {
-        while (m_running.load(std::memory_order_acquire)) {
+        while (m_running.load(std::memory_order_acquire) &&
+               m_workers_running.load(std::memory_order_acquire)) {
             auto task = m_encode_queue.take_for(m_config.flush_interval);
             if (!task) continue;
             try {
@@ -1195,6 +1347,14 @@ bool TightTransport::send_priority(const std::string& peer_id, Bytes payload, in
 
 bool TightTransport::send_command(const std::string& peer_id, Bytes payload) {
     return m_impl->send_command(peer_id, std::move(payload));
+}
+
+void TightTransport::set_lite_mode(bool lite) {
+    m_impl->set_lite_mode(lite);
+}
+
+bool TightTransport::lite_mode() const {
+    return m_impl->m_lite_mode.load();
 }
 
 std::vector<PeerEvent> TightTransport::peers() const {

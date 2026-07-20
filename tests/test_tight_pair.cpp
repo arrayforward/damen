@@ -100,6 +100,67 @@ TEST_CASE("e2e_tight_transport_pair") {
     server.stop();
 }
 
+TEST_CASE("e2e_tight_pair_lite_mode_and_dynamic_switch") {
+    // 服务器普通模式（4 线程），客户端精简模式（2 线程）；
+    // 验证精简模式回环 + 运行时 lite<->full 动态切换后收发正常
+    tight::TightConfig server_cfg;
+    server_cfg.bind = tight::NetAddress("127.0.0.1", 20021);
+    server_cfg.id = "full-server";
+    server_cfg.token = "shared-secret";
+    server_cfg.role = tight::LinkRole::Node;
+
+    tight::TightTransport server(server_cfg);
+    server.set_message_callback(
+        [&](const std::string& pid, tight::Bytes p) {
+            server.send(pid, tight::Bytes(p.begin(), p.end()));
+        });
+    ASSERT_TRUE(server.start());
+    ASSERT_FALSE(server.lite_mode());   // 服务器保持普通模式
+
+    tight::TightConfig client_cfg;
+    client_cfg.bind = tight::NetAddress("127.0.0.1", 20022);
+    client_cfg.id = "lite-client";
+    client_cfg.token = "shared-secret";
+    client_cfg.role = tight::LinkRole::Leaf;
+    client_cfg.lite_mode = true;        // 客户端精简模式
+
+    tight::TightTransport client(client_cfg);
+    std::atomic<int> echoes{0};
+    std::string last;
+    client.set_message_callback(
+        [&](const std::string&, tight::Bytes p) {
+            ++echoes;
+            last = std::string(p.begin(), p.end());
+        });
+    ASSERT_TRUE(client.start());
+    ASSERT_TRUE(client.lite_mode());
+    ASSERT_TRUE(client.connect({"full-server", tight::NetAddress("127.0.0.1", 20021)}));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    auto roundtrip = [&](const std::string& tag, int expect) {
+        client.send("full-server", tight::Bytes(tag.begin(), tag.end()));
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        ASSERT_EQ(echoes.load(), expect);
+        ASSERT_EQ(last, tag);
+    };
+
+    // 精简模式下收发
+    roundtrip("lite-roundtrip", 1);
+
+    // 动态升级为完整模式
+    client.set_lite_mode(false);
+    ASSERT_FALSE(client.lite_mode());
+    roundtrip("full-after-upgrade", 2);
+
+    // 动态降级回精简模式
+    client.set_lite_mode(true);
+    ASSERT_TRUE(client.lite_mode());
+    roundtrip("lite-after-downgrade", 3);
+
+    client.stop();
+    server.stop();
+}
+
 TEST_CASE("e2e_tight_pair_encryption_disabled") {
     // 关闭 ECDH+AEAD 后回退明文传输，确认兼容路径仍然可用
     tight::TightConfig server_cfg;
