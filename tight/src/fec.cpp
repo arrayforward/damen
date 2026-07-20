@@ -55,10 +55,12 @@ inline std::uint8_t coef(std::size_t parity_index, std::size_t data_index) {
                   static_cast<int>(parity_index));
 }
 
-// dst ^= c * src（逐字节 GF 运算，长度取 width 内最短）
-void gf_mul_add(Bytes& dst, const Bytes& src, std::uint8_t c, std::size_t width) {
-    if (c == 0) return;
-    std::size_t n = std::min(dst.size(), std::min(src.size(), width));
+// dst ^= c * src（逐字节 GF 运算；src 为指针/长度，不足 width 的部分按零
+// 处理——零与任何域元素相乘仍为零，等价于补齐后再编码）
+void gf_mul_add(Bytes& dst, const std::uint8_t* src, std::size_t src_len,
+                std::uint8_t c, std::size_t width) {
+    if (c == 0 || src_len == 0) return;
+    std::size_t n = std::min(dst.size(), std::min(src_len, width));
     if (c == 1) {   // 系数为 1 时就是纯 XOR，走快路径
         for (std::size_t i = 0; i < n; ++i) dst[i] ^= src[i];
         return;
@@ -69,17 +71,43 @@ void gf_mul_add(Bytes& dst, const Bytes& src, std::uint8_t c, std::size_t width)
     }
 }
 
+void gf_mul_add(Bytes& dst, const Bytes& src, std::uint8_t c, std::size_t width) {
+    gf_mul_add(dst, src.data(), src.size(), c, width);
+}
+
 } // namespace
 
 std::vector<Bytes> ReedSolomon::encode(const std::vector<Bytes>& data,
                                        std::size_t parity_count, std::size_t width) {
-    std::vector<Bytes> parities(parity_count, Bytes(width, 0));
+    std::vector<Span> spans;
+    spans.reserve(data.size());
+    for (const auto& f : data) spans.push_back({f.data(), f.size()});
+    return encode(spans, parity_count, width);
+}
+
+std::vector<Bytes> ReedSolomon::encode(const std::vector<Span>& fragments,
+                                       std::size_t parity_count, std::size_t width) {
+    std::vector<Bytes> parities;
+    encode_into(fragments, parity_count, width, parities);
+    return parities;
+}
+
+void ReedSolomon::encode_into(const std::vector<Span>& fragments,
+                              std::size_t parity_count, std::size_t width,
+                              std::vector<Bytes>& out) {
+    // 复用调用方缓冲：仅容量不足时扩容，热点路径摊销零堆分配
+    if (out.size() < parity_count) out.resize(parity_count);
     for (std::size_t p = 0; p < parity_count; ++p) {
-        for (std::size_t j = 0; j < data.size(); ++j) {
-            gf_mul_add(parities[p], data[j], coef(p, j), width);
+        if (out[p].size() < width) {
+            out[p].assign(width, 0);
+        } else {
+            std::fill(out[p].begin(), out[p].begin() + width, 0);
+        }
+        for (std::size_t j = 0; j < fragments.size(); ++j) {
+            gf_mul_add(out[p], fragments[j].data, fragments[j].size,
+                       coef(p, j), width);
         }
     }
-    return parities;
 }
 
 bool ReedSolomon::decode(std::vector<std::optional<Bytes>>& data,

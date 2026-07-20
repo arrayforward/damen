@@ -16,10 +16,12 @@ struct Peer;
 class Fragmenter {
 public:
     // Called once per emitted fragment (all data fragments first, then all
-    // parity fragments).
+    // parity fragments). frag_data/frag_len 为分片区间（调用方持有，
+    // 回调内同步消费）；width 为线上补齐宽度（不足补零）。
     using SendFragmentCallback = std::function<void(Peer* peer, std::uint32_t msg_id,
         std::uint16_t idx, std::uint16_t cnt, std::uint16_t data_cnt,
-        std::uint16_t real_size, const Bytes& fragment, bool ackable)>;
+        std::uint16_t real_size, const std::uint8_t* frag_data,
+        std::size_t frag_len, std::size_t width, bool ackable)>;
 
     // Splits payload into mtu-sized fragments, appends FEC parity fragments,
     // and emits every fragment through the callback.

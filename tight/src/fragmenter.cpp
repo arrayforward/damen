@@ -45,36 +45,40 @@ void Fragmenter::fragment_and_send(Peer& peer, Bytes payload, std::size_t mtu,
     }
     std::size_t total = payload.size();
     std::uint32_t total_be = to_be32(static_cast<std::uint32_t>(total & 0xFFFFFFFFULL));
-    Bytes size_prefix(4);
-    std::memcpy(size_prefix.data(), &total_be, 4);
-    Bytes full;
-    full.reserve(4 + payload.size());
-    full.insert(full.end(), size_prefix.begin(), size_prefix.end());
-    full.insert(full.end(), payload.begin(), payload.end());
+    // 4 字节总长前缀 + 负载：唯一的整体缓冲（分片以区间视图引用，零拷贝）
+    Bytes full(4 + payload.size());
+    std::memcpy(full.data(), &total_be, 4);
+    std::memcpy(full.data() + 4, payload.data(), payload.size());
     std::size_t real_total = full.size();
     std::size_t data_count = (real_total + frag_payload - 1) / frag_payload;
     if (data_count == 0) data_count = 1;
     std::size_t width = frag_payload;
-    std::vector<Bytes> frags(data_count);
-    std::vector<std::uint16_t> frag_lens(data_count);
+    std::uint16_t parity_count = compute_parity_count_for(late_ratio, data_count);
+
+    // RS 直接以 full 上的分片区间为输入（不足 width 的尾部按零处理，
+    // 与补齐后编码结果一致）；区间/校验缓冲用 thread_local 复用，
+    // 热点路径摊销零堆分配。
+    thread_local std::vector<ReedSolomon::Span> spans;
+    spans.clear();
+    spans.reserve(data_count);
     for (std::size_t i = 0; i < data_count; ++i) {
         std::size_t off = i * frag_payload;
         std::size_t len = std::min(frag_payload, real_total - off);
-        frags[i].assign(full.begin() + off, full.begin() + off + len);
-        frag_lens[i] = static_cast<std::uint16_t>(len);
-        if (frags[i].size() < width) frags[i].resize(width, 0);
+        spans.push_back({full.data() + off, len});
     }
-    std::uint16_t parity_count = compute_parity_count_for(late_ratio, data_count);
-    // Reed-Solomon 编码：p 个校验分片可恢复任意 p 个丢失分片
-    std::vector<Bytes> parities = ReedSolomon::encode(frags, parity_count, width);
+    thread_local std::vector<Bytes> parities;
+    ReedSolomon::encode_into(spans, parity_count, width, parities);
+
     std::uint16_t cnt = static_cast<std::uint16_t>(data_count + parity_count);
     std::uint16_t d_cnt = static_cast<std::uint16_t>(data_count);
     for (std::size_t i = 0; i < data_count; ++i) {
-        send_fragment(&peer, msg_id, static_cast<std::uint16_t>(i), cnt, d_cnt, frag_lens[i], frags[i], true);
+        send_fragment(&peer, msg_id, static_cast<std::uint16_t>(i), cnt, d_cnt,
+                      static_cast<std::uint16_t>(spans[i].size),
+                      spans[i].data, spans[i].size, width, true);
     }
     for (std::uint16_t p = 0; p < parity_count; ++p) {
         send_fragment(&peer, msg_id, static_cast<std::uint16_t>(data_count + p), cnt, d_cnt,
-                      static_cast<std::uint16_t>(width), parities[p], true);
+                      static_cast<std::uint16_t>(width), parities[p].data(), width, width, true);
     }
 }
 

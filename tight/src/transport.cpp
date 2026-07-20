@@ -471,10 +471,10 @@ public:
                                    reinterpret_cast<sockaddr*>(&from), &flen);
             if (n < 0) return;
             if (static_cast<std::size_t>(n) < kHeaderSize) continue;
-            Bytes datagram(buf, buf + n);
             PacketHeader header{};
             Bytes payload;
-            if (!PacketCodec::decode(datagram, header, payload)) continue;
+            // 直接从栈缓冲解码（流式 CRC），免去 datagram 拷贝
+            if (!PacketCodec::decode(buf, static_cast<std::size_t>(n), header, payload)) continue;
             handle_packet(from, header, payload);
         }
     }
@@ -947,11 +947,12 @@ public:
         header.flags |= kFlagEncrypted;
         header.payload_size = static_cast<std::uint16_t>(payload.size() + kGcmTagSize);
         auto nonce = build_nonce(header);
-        Bytes aad = PacketCodec::encode(header, Bytes{});
-        aad.resize(kHeaderSize - 4);   // 前 44 字节（不含 CRC 字段）
+        // AAD 为定稿报文头前 44 字节，栈缓冲编码（零堆分配）
+        std::uint8_t aad[kHeaderSize];
+        PacketCodec::encode_to(header, Bytes{}, aad);
         Bytes ct(payload.size());
         std::array<std::uint8_t, kGcmTagSize> tag{};
-        aes256_gcm_encrypt(peer->m_crypto_key, nonce, aad.data(), aad.size(),
+        aes256_gcm_encrypt(peer->m_crypto_key, nonce, aad, kHeaderSize - 4,
                            payload.data(), payload.size(), ct.data(), tag.data());
         ct.insert(ct.end(), tag.begin(), tag.end());
         return ct;
@@ -963,10 +964,11 @@ public:
         if (payload.size() < kGcmTagSize) return false;
         std::size_t ct_len = payload.size() - kGcmTagSize;
         auto nonce = build_nonce(header);
-        Bytes aad = PacketCodec::encode(header, Bytes{});
-        aad.resize(kHeaderSize - 4);
+        // AAD 栈缓冲编码（零堆分配）
+        std::uint8_t aad[kHeaderSize];
+        PacketCodec::encode_to(header, Bytes{}, aad);
         Bytes pt(ct_len);
-        if (!aes256_gcm_decrypt(peer->m_crypto_key, nonce, aad.data(), aad.size(),
+        if (!aes256_gcm_decrypt(peer->m_crypto_key, nonce, aad, kHeaderSize - 4,
                                 payload.data(), ct_len, payload.data() + ct_len,
                                 pt.data())) {
             return false;
@@ -987,7 +989,13 @@ public:
     void send_data_packet(Peer* peer, std::uint32_t msg_id, std::uint16_t idx,
                           std::uint16_t cnt, std::uint16_t data_cnt,
                           std::uint16_t real_size,
-                          const Bytes& payload, bool ackable) {
+                          const std::uint8_t* frag_data, std::size_t frag_len,
+                          std::size_t width, bool ackable) {
+        // 线上分片负载统一为 width（不足补零），与接收方 RS 恢复对齐
+        Bytes payload(width, 0);
+        if (frag_data && frag_len > 0) {
+            std::memcpy(payload.data(), frag_data, std::min(frag_len, width));
+        }
         PacketHeader header{};
         header.magic = kMagic;
         header.version = kVersion;
@@ -1057,10 +1065,10 @@ public:
                 continue;
             }
             if (static_cast<std::size_t>(n) < kHeaderSize) continue;
-            Bytes datagram(buf, buf + n);
             PacketHeader header{};
             Bytes payload;
-            if (!PacketCodec::decode(datagram, header, payload)) continue;
+            // 直接从栈缓冲解码（流式 CRC），免去 datagram 拷贝
+            if (!PacketCodec::decode(buf, static_cast<std::size_t>(n), header, payload)) continue;
             handle_packet(from, header, payload);
         }
     }
@@ -1204,9 +1212,8 @@ public:
                 auto item = std::move(queue.front());
                 queue.pop_front();
 
-                std::string peer_id = item.first;
+                std::string peer_id = std::move(item.first);
                 Bytes payload = std::move(item.second);
-                auto payload_ptr = std::make_shared<Bytes>(std::move(payload));
 
                 {
                     std::lock_guard<std::mutex> lock(m_peers_mutex);
@@ -1229,20 +1236,21 @@ public:
                             std::lock_guard<std::mutex> lk(m_send_mutex);
                             std::size_t total = 0;
                             for (const auto& kv : m_send_queue) total += kv.second.size();
-                            if (total < m_config.queue_limit) {
-                                m_send_queue[it->first].push_back({peer_id, *payload_ptr});
+                            if (total < queue_limit()) {
+                                // 移动语义回塞，无拷贝
+                                m_send_queue[it->first].emplace_back(peer_id, std::move(payload));
                             }
                         }
                         continue;
                     }
 
-                    EncodeTask task{&peer, std::move(*payload_ptr)};
+                    EncodeTask task{&peer, std::move(payload)};
                     if (!m_encode_queue.try_push(std::move(task))) {
                         std::lock_guard<std::mutex> lk(m_send_mutex);
                         std::size_t total = 0;
                         for (const auto& kv : m_send_queue) total += kv.second.size();
-                        if (total < m_config.queue_limit) {
-                            m_send_queue[0].push_back({peer_id, *payload_ptr});
+                        if (total < queue_limit()) {
+                            m_send_queue[0].emplace_back(peer_id, std::move(task.m_payload));
                         }
                     }
                 }
@@ -1273,9 +1281,11 @@ public:
                                       [this](Peer* p, std::uint32_t msg_id,
                                              std::uint16_t idx, std::uint16_t cnt,
                                              std::uint16_t data_cnt, std::uint16_t real_size,
-                                             const Bytes& frag, bool ackable) {
+                                             const std::uint8_t* frag_data, std::size_t frag_len,
+                                             std::size_t width, bool ackable) {
                                           send_data_packet(p, msg_id, idx, cnt, data_cnt,
-                                                           real_size, frag, ackable);
+                                                           real_size, frag_data, frag_len,
+                                                           width, ackable);
                                       });
     }
 

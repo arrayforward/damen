@@ -15,6 +15,14 @@ public:
     static Bytes encode(const PacketHeader& header, const Bytes& payload);
     static bool decode(const Bytes& datagram, PacketHeader& header, Bytes& payload);
     static std::uint32_t crc32(const std::uint8_t* data, std::size_t size);
+
+    // 零堆分配变体：
+    // encode_to 写入调用方缓冲区（容量需 ≥ 48 + payload.size()），返回总长。
+    // decode 直接从指针/长度解码，流式 CRC 校验，免去 datagram 与 tmp 拷贝。
+    static std::size_t encode_to(const PacketHeader& header, const Bytes& payload,
+                                 std::uint8_t* out);
+    static bool decode(const std::uint8_t* data, std::size_t size,
+                       PacketHeader& header, Bytes& payload);
 };
 
 } // namespace tight

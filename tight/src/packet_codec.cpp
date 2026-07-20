@@ -9,9 +9,9 @@ namespace tight {
 
 using namespace tight_detail;
 
-Bytes PacketCodec::encode(const PacketHeader& header, const Bytes& payload) {
-    Bytes buf(kHeaderSize + payload.size());
-    std::uint8_t* p = buf.data();
+std::size_t PacketCodec::encode_to(const PacketHeader& header, const Bytes& payload,
+                                   std::uint8_t* out) {
+    std::uint8_t* p = out;
 
     auto put32 = [&](std::size_t off, std::uint32_t v) {
         std::uint32_t be = to_be32(v);
@@ -48,14 +48,24 @@ Bytes PacketCodec::encode(const PacketHeader& header, const Bytes& payload) {
         std::memcpy(p + kHeaderSize, payload.data(), payload.size());
     }
 
-    std::uint32_t crc = crc32_compute(buf.data(), buf.size());
-    put32(44, crc);
+    // 流式 CRC：头 44 字节 + 4 个零字节 + 负载
+    std::uint32_t crc = crc32_update(0xFFFFFFFFU, p, 44);
+    const std::uint8_t zeros[4] = {0, 0, 0, 0};
+    crc = crc32_update(crc, zeros, 4);
+    crc = crc32_update(crc, p + kHeaderSize, payload.size());
+    put32(44, crc ^ 0xFFFFFFFFU);
+    return kHeaderSize + payload.size();
+}
+
+Bytes PacketCodec::encode(const PacketHeader& header, const Bytes& payload) {
+    Bytes buf(kHeaderSize + payload.size());
+    encode_to(header, payload, buf.data());
     return buf;
 }
 
-bool PacketCodec::decode(const Bytes& datagram, PacketHeader& header, Bytes& payload) {
-    if (datagram.size() < kHeaderSize) return false;
-    const std::uint8_t* p = datagram.data();
+bool PacketCodec::decode(const std::uint8_t* p, std::size_t size,
+                         PacketHeader& header, Bytes& payload) {
+    if (size < kHeaderSize) return false;
 
     auto get32 = [&](std::size_t off) {
         std::uint32_t v;
@@ -95,20 +105,21 @@ bool PacketCodec::decode(const Bytes& datagram, PacketHeader& header, Bytes& pay
     header.tick = get32(40);
     header.checksum = get32(44);
 
-    if (datagram.size() < kHeaderSize + payload_size) return false;
+    if (size < kHeaderSize + payload_size) return false;
 
-    Bytes tmp(kHeaderSize + payload_size);
-    std::memcpy(tmp.data(), p, kHeaderSize);
-    if (payload_size > 0) {
-        std::memcpy(tmp.data() + kHeaderSize, p + kHeaderSize, payload_size);
-    }
-    std::uint32_t zero = 0;
-    std::memcpy(tmp.data() + 44, &zero, 4);
-    std::uint32_t calc = crc32_compute(tmp.data(), tmp.size());
-    if (calc != header.checksum) return false;
+    // 流式 CRC 校验：头 44 字节 + 4 个零字节 + 负载（免 tmp 拷贝）
+    std::uint32_t crc = crc32_update(0xFFFFFFFFU, p, 44);
+    const std::uint8_t zeros[4] = {0, 0, 0, 0};
+    crc = crc32_update(crc, zeros, 4);
+    crc = crc32_update(crc, p + kHeaderSize, payload_size);
+    if ((crc ^ 0xFFFFFFFFU) != header.checksum) return false;
 
     payload.assign(p + kHeaderSize, p + kHeaderSize + payload_size);
     return true;
+}
+
+bool PacketCodec::decode(const Bytes& datagram, PacketHeader& header, Bytes& payload) {
+    return decode(datagram.data(), datagram.size(), header, payload);
 }
 
 std::uint32_t PacketCodec::crc32(const std::uint8_t* data, std::size_t size) {

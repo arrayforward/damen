@@ -18,9 +18,26 @@ namespace tight {
 
 class ReedSolomon {
 public:
+    // 零拷贝区间视图：指向已有内存的分片（data 不为空、size 为有效长度；
+    // 不足 width 的尾部分片按零处理，与补齐后编码结果一致）
+    struct Span {
+        const std::uint8_t* data;
+        std::size_t size;
+    };
+
     // 编码：对 data 分片（统一长度 width）生成 parity_count 个校验分片。
     static std::vector<Bytes> encode(const std::vector<Bytes>& data,
                                      std::size_t parity_count, std::size_t width);
+
+    // 编码（零拷贝区间输入），分片内存由调用方持有。
+    static std::vector<Bytes> encode(const std::vector<Span>& fragments,
+                                     std::size_t parity_count, std::size_t width);
+
+    // 编码并写入调用方提供的输出缓冲：复用既有分配，
+    // 仅在容量增长时扩容（热点路径下摊销为零堆分配）。
+    static void encode_into(const std::vector<Span>& fragments,
+                            std::size_t parity_count, std::size_t width,
+                            std::vector<Bytes>& out);
 
     // 解码：data 中以 nullopt 表示缺失分片；parity 为收到的
     // (校验分片索引, 内容) 列表。缺失数不超过校验数时可全部恢复并回填，

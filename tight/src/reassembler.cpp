@@ -116,24 +116,45 @@ bool Reassembler::try_assemble(Peer& peer, IncomingMessage& in,
     for (std::size_t i = 0; i < data_count; ++i) {
         if (in.m_fragments[i].has_value()) ++have;
     }
-    auto build_msg = [&](const std::vector<Bytes>& parts, const std::vector<std::uint16_t>& real_sizes) -> Bytes {
-        Bytes full;
-        for (std::size_t i = 0; i < parts.size() && i < real_sizes.size(); ++i) {
-            std::size_t n = std::min<std::size_t>(real_sizes[i], parts[i].size());
-            full.insert(full.end(), parts[i].begin(), parts[i].begin() + n);
+    // 直接从分片组装完整消息：一次分配，跳过 4 字节总长前缀，
+    // 不再为每个分片做中间拷贝。流的前 4 字节为总长（大端）。
+    auto build_msg = [&](std::size_t data_count) -> Bytes {
+        std::size_t stream_len = 0;
+        for (std::size_t i = 0; i < data_count; ++i) {
+            stream_len += std::min<std::size_t>(in.m_sizes[i], in.m_fragments[i]->size());
         }
-        if (full.size() < 4) return Bytes{};
+        if (stream_len < 4) return Bytes{};
+        // 读取流前 4 字节的总长前缀（可能横跨分片边界）
+        std::uint8_t prefix[4] = {0, 0, 0, 0};
+        std::size_t need = 4;
+        for (std::size_t i = 0; i < data_count && need > 0; ++i) {
+            std::size_t n = std::min<std::size_t>(in.m_sizes[i], in.m_fragments[i]->size());
+            std::size_t take = std::min(n, need);
+            std::memcpy(prefix + (4 - need), in.m_fragments[i]->data(), take);
+            need -= take;
+        }
         std::uint32_t total_be = 0;
-        std::memcpy(&total_be, full.data(), 4);
+        std::memcpy(&total_be, prefix, 4);
         std::uint32_t total = to_be32(total_be);
-        if (total > full.size() - 4) total = static_cast<std::uint32_t>(full.size() - 4);
-        return Bytes(full.begin() + 4, full.begin() + 4 + total);
+        if (total > stream_len - 4) total = static_cast<std::uint32_t>(stream_len - 4);
+
+        Bytes result(total);
+        std::size_t skip = 4;   // 跳过总长前缀
+        std::size_t out_off = 0;
+        for (std::size_t i = 0; i < data_count && out_off < total; ++i) {
+            std::size_t n = std::min<std::size_t>(in.m_sizes[i], in.m_fragments[i]->size());
+            const std::uint8_t* src = in.m_fragments[i]->data();
+            if (skip >= n) { skip -= n; continue; }
+            src += skip;
+            n -= skip;
+            skip = 0;
+            if (out_off + n > total) n = total - out_off;
+            std::memcpy(result.data() + out_off, src, n);
+            out_off += n;
+        }
+        return result;
     };
     if (have == data_count) {
-        std::vector<Bytes> parts;
-        std::vector<std::uint16_t> real_sizes;
-        parts.reserve(data_count);
-        real_sizes.reserve(data_count);
         for (std::size_t i = 0; i < data_count; ++i) {
             if (!in.m_fragments[i].has_value()) {
                 TIGHT_LOG_DEBUG(std::string("[tight] try_assemble missing frag i=") + std::to_string(i) +
@@ -141,10 +162,8 @@ bool Reassembler::try_assemble(Peer& peer, IncomingMessage& in,
                                  " total=" + std::to_string(in.m_total_count));
                 return false;  // race; retry next fragment
             }
-            parts.push_back(*in.m_fragments[i]);
-            real_sizes.push_back(in.m_sizes[i]);
         }
-        deliver(&peer, build_msg(parts, real_sizes));
+        deliver(&peer, build_msg(data_count));
         return true;
     }
     // 统计缺失的数据分片数
@@ -180,11 +199,7 @@ bool Reassembler::try_assemble(Peer& peer, IncomingMessage& in,
             in.m_sizes[i] = static_cast<std::uint16_t>(width);
         }
     }
-    std::vector<Bytes> recovered_parts(data_count);
-    for (std::size_t i = 0; i < data_count; ++i) {
-        recovered_parts[i] = *in.m_fragments[i];
-    }
-    deliver(&peer, build_msg(recovered_parts, in.m_sizes));
+    deliver(&peer, build_msg(data_count));
     return true;
 }
 
