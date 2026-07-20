@@ -14,6 +14,7 @@ typedef int socklen_t;
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netdb.h>
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <unistd.h>
@@ -40,7 +41,7 @@ inline int tight_setsockopt(NativeSocket s, int level, int optname,
     return ::setsockopt(s, level, optname, optval, optlen);
 }
 inline int tight_recvfrom(NativeSocket s, char* buf, int len, int flags,
-                          sockaddr* from, int* fromlen) {
+                          sockaddr* from, SockLen* fromlen) {
     return ::recvfrom(s, buf, len, flags, from, fromlen);
 }
 inline int tight_sendto(NativeSocket s, const char* buf, int len, int flags,
@@ -59,7 +60,7 @@ inline int tight_setsockopt(NativeSocket s, int level, int optname,
     return ::setsockopt(s, level, optname, optval, optlen);
 }
 inline int tight_recvfrom(NativeSocket s, char* buf, int len, int flags,
-                          sockaddr* from, int* fromlen) {
+                          sockaddr* from, SockLen* fromlen) {
     return ::recvfrom(s, buf, len, flags, from, fromlen);
 }
 inline int tight_sendto(NativeSocket s, const char* buf, int len, int flags,

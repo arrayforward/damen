@@ -5,16 +5,31 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
 #include <windows.h>
 #include <psapi.h>
-
-using namespace tight;
-
 static std::size_t working_set_kb() {
     PROCESS_MEMORY_COUNTERS pmc{};
     GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
     return pmc.WorkingSetSize / 1024;
 }
+#else
+#include <fstream>
+static std::size_t working_set_kb() {
+    std::ifstream in("/proc/self/status");
+    std::string key;
+    std::size_t value;
+    std::string unit;
+    while (in >> key) {
+        if (key == "VmRSS:") { in >> value >> unit; return value; }
+        in.ignore(4096, '\n');
+    }
+    return 0;
+}
+#endif
+
+using namespace tight;
 
 int main() {
     TightConfig sc;
