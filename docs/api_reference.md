@@ -252,7 +252,7 @@ server.add_message_listener(GatewayMessageType::kDevicePing,
 
 | 字段 | 默认值 |
 |---|---|
-| `m_tight.host / port / id / token / mtu / heartbeat / dead_timeout` | `0.0.0.0` / `9443` / 空 / `gateway-token` / `1200` / `5s` / `30s` |
+| `m_tight.host / port / id / token / mtu / heartbeat / dead_timeout` | `0.0.0.0` / `9443` / 空 / `gateway-token` / `1350` / `5s` / `30s` |
 | `m_downstream.target / connect_timeout / reconnect_delay` | `media-service:50051` / `10s` / `5s` |
 | `m_redis.url / timeout` | `redis://redis:6379` / `200ms` |
 | `m_server.max_connections / heartbeat_seconds / max_payload_bytes / session_timeout` | `5000` / `60` / `65536` / `60min` |

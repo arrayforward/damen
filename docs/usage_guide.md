@@ -149,7 +149,7 @@ t.set_command_callback([](const std::string& peer, tight::Bytes payload) { ... }
 ### 3.6 常用配置（`TightConfig`）
 
 ```cpp
-cfg.mtu = 1200;                       // 报文大小（含 48 字节头）
+cfg.mtu = 1350;                       // 报文大小（含 48 字节头）
 cfg.late_rtt_multiplier = 4.0;        // 慢包阈值（传输时间 > 4×RTT）
 cfg.speed_test_enabled = true;        // 建连测速
 cfg.speed_test_bytes = 100 * 1024;    // 测速列车大小
