@@ -119,7 +119,18 @@ public:
           m_outbound_queue(m_config.lite_mode
                                ? std::min<std::size_t>(m_config.outbound_queue_limit, 256)
                                : m_config.outbound_queue_limit),
-          m_bandwidth(m_config.initial_bandwidth_bytes) {
+           m_bandwidth(m_config.initial_bandwidth_bytes) {
+        // m_rng 默认构造会得到固定序列：同秒启动的多个进程将产生相同的
+        // client_id/session_id（GCM nonce 复用隐患）。用 random_device +
+        // 高精度时钟混合播种，保证进程间序列无关。
+        {
+            std::random_device rd;
+            std::uint64_t seed = (static_cast<std::uint64_t>(rd()) << 32) ^ rd();
+            seed ^= static_cast<std::uint64_t>(
+                std::chrono::high_resolution_clock::now().time_since_epoch().count());
+            seed ^= reinterpret_cast<std::uintptr_t>(this);
+            m_rng.seed(seed);
+        }
         m_local_client_id = static_cast<std::uint32_t>(random_u64() & 0x7FFFFFFFu);
         m_local_session_id = random_u64();
         if (m_local_client_id == 0) m_local_client_id = 1;
@@ -129,8 +140,6 @@ public:
             m_local_keypair = x25519_generate();
         }
     }
-
-    // 精简模式下消息排队上限自动收紧
     std::size_t queue_limit() const {
         return m_lite_mode.load()
                    ? std::min<std::size_t>(m_config.queue_limit, 128)
@@ -670,7 +679,18 @@ public:
             peer->m_state = LinkState::Established;
             fire_peer_event(peer, LinkState::Established);
         }
-        send_control(peer, PacketType::HandshakeAck, Bytes{}, true);
+        // HandshakeAck 负载尾部布局与 Handshake 一致：[pubkey 32B?][flags 1B]。
+        // 双方同时 connect() 时，对端可能只收到本 Ack 而收不到我们的
+        // Handshake（例如它开始监听前我们的 Handshake 已丢失），携带公钥
+        // 与能力标志可让对端仅凭 Ack 完成 ECDH 协商与重传协商。
+        Bytes ack_payload;
+        if (m_config.encryption_enabled) {
+            ack_payload.insert(ack_payload.end(),
+                               m_local_keypair.public_key.begin(),
+                               m_local_keypair.public_key.end());
+        }
+        ack_payload.push_back(m_config.retransmit_enabled ? 0x01 : 0x00);
+        send_control(peer, PacketType::HandshakeAck, ack_payload, true);
     }
 
     void handle_handshake_ack(Peer* peer, const PacketHeader& header, const Bytes& payload) {
@@ -678,6 +698,17 @@ public:
         // restarts on a fresh session.
         sync_clock(peer, header.tick, unix_millis());
         CommandChannel::reset(*peer);
+        // Ack 负载（若携带）：[pubkey 32B?][flags 1B]，与 Handshake 尾部一致。
+        if (!payload.empty()) {
+            std::size_t tail = payload.size();
+            peer->m_peer_retransmit = (payload[tail - 1] & 0x01U) != 0;
+            tail -= 1;
+            if (m_config.encryption_enabled && tail >= 32) {
+                std::array<std::uint8_t, 32> peer_pub{};
+                std::memcpy(peer_pub.data(), payload.data() + (tail - 32), 32);
+                derive_session_key(peer, peer_pub, header.client_id);
+            }
+        }
         if (peer->m_state == LinkState::Online) return;
         if (peer->m_state == LinkState::Handshake || peer->m_state == LinkState::Established) {
             send_control(peer, PacketType::Online, Bytes{}, true);
